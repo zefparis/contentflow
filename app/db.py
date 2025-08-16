@@ -1,4 +1,5 @@
 from sqlalchemy import create_engine
+import sqlalchemy as sa
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 from app.config import settings
@@ -28,6 +29,43 @@ async def init_db():
     # Import models to register metadata, then create all
     import app.models  # noqa: F401
     Base.metadata.create_all(bind=engine)
+    # --- lightweight auto-migrations for missing columns ---
+    insp = sa.inspect(engine)
+
+    def has_column(table: str, column: str) -> bool:
+        try:
+            cols = [c["name"] for c in insp.get_columns(table)]
+            return column in cols
+        except Exception:
+            return False
+
+    def add_column(table: str, column: str, type_sqlite: str, type_pg: str, default_sql: str | None = None):
+        dialect = engine.dialect.name
+        coltype = type_pg if dialect.startswith("post") else type_sqlite
+        default_clause = f" DEFAULT {default_sql}" if default_sql else ""
+        sql = f"ALTER TABLE {table} ADD COLUMN {column} {coltype}{default_clause}"
+        with engine.begin() as conn:
+            try:
+                conn.execute(sa.text(sql))
+            except Exception:
+                pass
+
+    # metric_events: ensure timestamp
+    if insp.has_table("metric_events") and not has_column("metric_events", "timestamp"):
+        add_column("metric_events", "timestamp", "DATETIME", "TIMESTAMP", "CURRENT_TIMESTAMP")
+
+    # jobs: ensure payload and attempts/status columns
+    if insp.has_table("jobs"):
+        if not has_column("jobs", "payload"):
+            # JSONB on Postgres, TEXT on SQLite
+            add_column("jobs", "payload", "TEXT", "JSONB")
+        if not has_column("jobs", "attempts"):
+            add_column("jobs", "attempts", "INTEGER", "INTEGER", "0")
+        if not has_column("jobs", "status"):
+            add_column("jobs", "status", "TEXT", "TEXT", "'queued'")
+        for ts_col in ("created_at", "started_at", "completed_at"):
+            if not has_column("jobs", ts_col):
+                add_column("jobs", ts_col, "DATETIME", "TIMESTAMP", "CURRENT_TIMESTAMP" if ts_col == "created_at" else None)
 
 # Backward-compat alias for older routes expecting get_session
 get_session = get_db

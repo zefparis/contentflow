@@ -28,11 +28,14 @@ def compat_payments_calculate(platform: str | None = Query(None)):
     """
     epc = float(epc_7d(platform=platform))
     cpc = float(compute_cpc(epc))
+    # Keep legacy fields and add dummy contract for frontend expecting {amount, currency}
     return JSONResponse({
         "success": True,
         "platform": platform,
         "epc_7d": round(epc, 3),
         "cpc": cpc,
+        "amount": round(cpc, 2),
+        "currency": "EUR",
     })
 
 @router.get("/api/ai/orchestrator/status")

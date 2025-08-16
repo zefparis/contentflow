@@ -94,6 +94,19 @@ class MetricEvent(Base):
     post = relationship("Post", back_populates="metric_events")
 
 
+class Account(Base):
+    __tablename__ = "accounts"
+
+    # Conçu pour être compatible avec les routes ig_oauth/ig_publish
+    id = Column(String, primary_key=True, default=lambda: str(uuid4()))
+    username = Column(String(100), index=True, nullable=True)
+    platform = Column(String(50), index=True, nullable=False)
+    token = Column(Text, nullable=True)
+    enabled = Column(Boolean, default=False)
+    oauth_json = Column(Text, default="{}")
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
 class Link(Base):
     __tablename__ = "links"
     
@@ -112,7 +125,7 @@ class Job(Base):
     id = Column(Integer, primary_key=True, index=True)
     kind = Column(String(50), index=True)  # ingest, transform, publish, metrics
     status = Column(String(20), default="queued")  # queued, running, completed, failed, dlq
-    payload = Column(Text)  # JSON payload for job
+    payload = Column(JSON)  # JSON payload for job
     idempotency_key = Column(String(32), unique=True, index=True)
     attempts = Column(Integer, default=0)
     last_error = Column(Text, nullable=True)
