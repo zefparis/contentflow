@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+
+{% block page_title %}Job Execution History{% endblock %}
+{% block page_description %}View execution logs and job history{% endblock %}
+
+{% block header_actions %}
+<div class="flex items-center space-x-3">
+    <select class="border border-gray-300 rounded-lg px-3 py-2 text-sm">
+        <option>All Jobs</option>
+        <option>Ingest</option>
+        <option>Transform</option>
+        <option>Publish</option>
+    </select>
+    <button class="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors text-sm">
+        <i class="fas fa-refresh mr-2"></i>
+        Refresh
+    </button>
+</div>
+{% endblock %}
+
+{% block content %}
+<div class="bg-white rounded-xl shadow-sm border border-gray-200">
+    <div class="overflow-x-auto">
+        <table class="w-full">
+            <thead class="bg-gray-50 border-b border-gray-200">
+                <tr>
+                    <th class="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">Job Type</th>
+                    <th class="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
+                    <th class="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">Duration</th>
+                    <th class="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">Started</th>
+                    <th class="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">Logs</th>
+                    <th class="text-right px-6 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-gray-200">
+                {% for run in runs %}
+                <tr class="hover:bg-gray-50">
+                    <td class="px-6 py-4">
+                        <div class="flex items-center space-x-3">
+                            <div class="w-8 h-8 {% if run.kind == 'ingest' %}bg-blue-100{% elif run.kind == 'transform' %}bg-green-100{% else %}bg-purple-100{% endif %} rounded-lg flex items-center justify-center">
+                                <i class="fas {% if run.kind == 'ingest' %}fa-download text-blue-600{% elif run.kind == 'transform' %}fa-cog text-green-600{% else %}fa-share text-purple-600{% endif %} text-xs"></i>
+                            </div>
+                            <span class="font-medium text-gray-900">{{ run.kind|title }}</span>
+                        </div>
+                    </td>
+                    <td class="px-6 py-4">
+                        <span class="px-2 py-1 {% if run.status == 'completed' %}bg-green-100 text-green-800{% elif run.status == 'running' %}bg-blue-100 text-blue-800{% else %}bg-red-100 text-red-800{% endif %} rounded-full text-xs font-medium">
+                            {{ run.status|title }}
+                        </span>
+                    </td>
+                    <td class="px-6 py-4 text-sm text-gray-900">
+                        {% if run.completed_at and run.created_at %}
+                            {{ "%.1f"|format((run.completed_at - run.created_at).total_seconds()) }}s
+                        {% else %}
+                            —
+                        {% endif %}
+                    </td>
+                    <td class="px-6 py-4 text-sm text-gray-500">
+                        {{ run.created_at.strftime('%Y-%m-%d %H:%M') }}
+                    </td>
+                    <td class="px-6 py-4">
+                        <span class="text-sm text-gray-600">
+                            {{ (run.logs or 'No logs available')[:80] }}
+                            {% if run.logs and run.logs|length > 80 %}...{% endif %}
+                        </span>
+                    </td>
+                    <td class="px-6 py-4 text-right">
+                        <button class="text-primary-600 hover:text-primary-700 text-sm font-medium">
+                            View Logs
+                        </button>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

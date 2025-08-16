@@ -1,0 +1,336 @@
+0) ENV (append)
+
+.env.example
+
+FEATURE_BYOP=true
+BYOP_DEFAULT_REVSHARE_PCT=0.40
+SHARE_EMAIL_ENABLED=true
+SHARE_EMAIL_DAILY_LIMIT=200
+SHAREKIT_DEFAULT_HASHTAGS=#ia #tools #productivité
+
+
+app/config.py (append)
+
+class Settings(BaseSettings):
+    # ...
+    FEATURE_BYOP: bool = True
+    BYOP_DEFAULT_REVSHARE_PCT: float = 0.40
+    SHARE_EMAIL_ENABLED: bool = True
+    SHARE_EMAIL_DAILY_LIMIT: int = 200
+    SHAREKIT_DEFAULT_HASHTAGS: str = "#ia #tools #productivité"
+
+1) DB / Models (append)
+
+infra/migrations.sql (append)
+
+CREATE TABLE IF NOT EXISTS byop_submissions (
+  id TEXT PRIMARY KEY,
+  partner_id TEXT NOT NULL REFERENCES partners(id) ON DELETE CASCADE,
+  source_url TEXT,
+  title TEXT,
+  description TEXT,
+  hashtags TEXT,
+  cta TEXT,
+  asset_id TEXT,
+  status TEXT NOT NULL DEFAULT 'submitted', -- submitted|processing|ready|failed
+  revshare_pct REAL NOT NULL DEFAULT 0.40,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS contact_share_logs (
+  id TEXT PRIMARY KEY,
+  partner_id TEXT NOT NULL REFERENCES partners(id) ON DELETE CASCADE,
+  channel TEXT NOT NULL,                -- whatsapp|telegram|x|email|copy
+  recipients_count INTEGER NOT NULL DEFAULT 0,
+  message TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_contact_share_partner ON contact_share_logs(partner_id);
+
+
+app/models.py (append)
+
+class ByopSubmission(Base):
+    __tablename__ = "byop_submissions"
+    id = sa.Column(sa.String, primary_key=True, default=lambda: str(uuid4()))
+    partner_id = sa.Column(sa.String, sa.ForeignKey("partners.id", ondelete="CASCADE"), index=True)
+    source_url = sa.Column(sa.String, nullable=True)
+    title = sa.Column(sa.String, nullable=True)
+    description = sa.Column(sa.String, nullable=True)
+    hashtags = sa.Column(sa.String, nullable=True)
+    cta = sa.Column(sa.String, nullable=True)
+    asset_id = sa.Column(sa.String, nullable=True)
+    status = sa.Column(sa.String, nullable=False, default="submitted")
+    revshare_pct = sa.Column(sa.Float, nullable=False, default=0.40)
+    created_at = sa.Column(sa.DateTime(timezone=True), server_default=sa.func.now())
+
+class ContactShareLog(Base):
+    __tablename__ = "contact_share_logs"
+    id = sa.Column(sa.String, primary_key=True, default=lambda: str(uuid4()))
+    partner_id = sa.Column(sa.String, sa.ForeignKey("partners.id", ondelete="CASCADE"), index=True)
+    channel = sa.Column(sa.String, nullable=False)
+    recipients_count = sa.Column(sa.Integer, nullable=False, default=0)
+    message = sa.Column(sa.Text, nullable=True)
+    created_at = sa.Column(sa.DateTime(timezone=True), server_default=sa.func.now())
+
+2) Services BYOP (new)
+
+app/services/byop.py
+
+import json, datetime as dt
+from typing import Optional
+from app.db import SessionLocal
+from app.config import settings
+from app.models import ByopSubmission, Asset
+
+def create_asset_for_byop(partner_id: str, source_url: Optional[str], title: str, description: str, hashtags: str, cta: str) -> tuple[str, dict]:
+    """
+    Crée un Asset 'new' avec meta tagguée BYOP/owner_partner_id.
+    Ne télécharge rien ici (safe). La chaîne existante d’ingestion/transform prendra le relai.
+    """
+    db = SessionLocal()
+    meta = {
+        "source": "byop",
+        "owner_partner_id": partner_id,
+        "title": title or "",
+        "description": description or "",
+        "hashtags": hashtags or settings.SHAREKIT_DEFAULT_HASHTAGS,
+        "cta": cta or "",
+    }
+    if source_url: meta["download_url"] = source_url  # ton pipeline utilise déjà ce champ
+    asset = Asset(status="new", meta_json=json.dumps(meta, ensure_ascii=False))
+    db.add(asset); db.commit()
+    return asset.id, meta
+
+def register_byop_submission(partner_id: str, source_url: Optional[str], title: str, description: str, hashtags: str, cta: str, asset_id: str) -> str:
+    db = SessionLocal()
+    sub = ByopSubmission(
+        partner_id=partner_id, source_url=source_url or "", title=title or "",
+        description=description or "", hashtags=hashtags or "", cta=cta or "",
+        asset_id=asset_id, status="processing", revshare_pct=float(settings.BYOP_DEFAULT_REVSHARE_PCT)
+    )
+    db.add(sub); db.commit()
+    return sub.id
+
+3) Services Share Kit (new, safe fallbacks)
+
+app/services/sharekit.py
+
+import urllib.parse, datetime as dt, json
+from app.db import SessionLocal
+from app.models import Asset, ContactShareLog
+from app.config import settings
+
+def _try_create_shortlink(asset_id: str, partner_id: str) -> str:
+    # essaie d'utiliser ton service shortlink existant; fallback vers URL interne neutre
+    try:
+        from app.services.links import create_shortlink  # si ton projet l'expose
+        link = create_shortlink(asset_id=asset_id, partner_id=partner_id)
+        return link.get("short_url") or "#"
+    except Exception:
+        return f"/l/{asset_id}?pid={partner_id}"
+
+def build_share_text(title: str, cta: str, short_url: str, hashtags: str) -> str:
+    tags = (" " + hashtags.strip()) if (hashtags and hashtags.strip()) else ""
+    return f"{title.strip()}\n\n{cta.strip()} {short_url}{tags}"
+
+def share_intents(short_url: str, text: str) -> dict:
+    enc_t = urllib.parse.quote_plus(text)
+    enc_u = urllib.parse.quote_plus(short_url)
+    return {
+        "whatsapp": f"https://wa.me/?text={enc_t}",
+        "telegram": f"https://t.me/share/url?url={enc_u}&text={enc_t}",
+        "x": f"https://twitter.com/intent/tweet?url={enc_u}&text={enc_t}"
+    }
+
+def log_share(partner_id: str, channel: str, recipients: int, message: str):
+    db = SessionLocal()
+    db.add(ContactShareLog(partner_id=partner_id, channel=channel, recipients_count=int(recipients or 0), message=message[:2000]))
+    db.commit()
+
+def daily_email_count(partner_id: str) -> int:
+    db = SessionLocal()
+    since = dt.datetime.utcnow() - dt.timedelta(days=1)
+    return db.query(ContactShareLog)\
+        .filter(ContactShareLog.partner_id==partner_id, ContactShareLog.channel=="email", ContactShareLog.created_at>=since)\
+        .count()
+
+4) Routes BYOP & Share UI (new)
+
+app/routes/byop_ui.py
+
+from fastapi import APIRouter, Request, Depends, Form, Query
+from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
+from app.config import settings
+from app.db import get_session, SessionLocal
+from app.models import Partner, Asset, ByopSubmission
+from app.services.byop import create_asset_for_byop, register_byop_submission
+from app.services.sharekit import _try_create_shortlink, build_share_text, share_intents, log_share, daily_email_count
+from app.providers.brevo_client import Brevo
+
+router = APIRouter(prefix="/byop", tags=["byop"])
+
+def _guard_pid(request: Request):
+    pid = request.cookies.get("partner_id")
+    if not pid: 
+        raise PermissionError("Non authentifié")
+    return pid
+
+@router.get("/new")
+def byop_new(request: Request):
+    if not settings.FEATURE_BYOP:
+        return HTMLResponse("<h3>BYOP désactivé</h3>", status_code=404)
+    html = """
+    <section style="max-width:860px;margin:40px auto;font-family:system-ui">
+      <h2>Créer un post (BYOP)</h2>
+      <p>Colle l’URL d’une vidéo (mp4/direct/YouTube/TikTok) ou laisse vide si tu veux juste un lien.</p>
+      <form method="post" action="/byop/submit">
+        <input name="source_url" placeholder="https://..." style="padding:8px;border:1px solid #ccc;width:100%;max-width:720px"><br><br>
+        <input name="title" placeholder="Titre accrocheur" style="padding:8px;border:1px solid #ccc;width:100%;max-width:720px"><br><br>
+        <textarea name="description" placeholder="Description courte" style="padding:8px;border:1px solid #ccc;width:100%;max-width:720px;height:80px"></textarea><br><br>
+        <input name="hashtags" placeholder="#ia #tools #productivité" style="padding:8px;border:1px solid #ccc;width:100%;max-width:720px"><br><br>
+        <input name="cta" placeholder="Appelle à l’action (ex: Essaye l’outil ici →)" style="padding:8px;border:1px solid #ccc;width:100%;max-width:720px"><br><br>
+        <button style="padding:8px 12px">Générer</button>
+      </form>
+      <p style="opacity:.7">Note: la vidéo sera traitée par le pipeline existant (recadrage, captions). Le post ne part pas avant ta validation.</p>
+    </section>
+    """
+    return HTMLResponse(html)
+
+@router.post("/submit")
+def byop_submit(request: Request, source_url: str = Form(""), title: str = Form(""), description: str = Form(""), hashtags: str = Form(""), cta: str = Form("")):
+    if not settings.FEATURE_BYOP:
+        return HTMLResponse("<h3>BYOP désactivé</h3>", status_code=404)
+    try:
+        pid = _guard_pid(request)
+    except PermissionError:
+        return HTMLResponse("<h3>Connecte-toi via le portal partenaire</h3>", status_code=401)
+    asset_id, meta = create_asset_for_byop(pid, source_url.strip() or None, title, description, hashtags, cta)
+    sid = register_byop_submission(pid, source_url.strip() or None, title, description, hashtags, cta, asset_id)
+    return RedirectResponse(url=f"/byop/kit?id={sid}", status_code=303)
+
+@router.get("/kit")
+def byop_kit(request: Request, id: str = Query(...), db=Depends(get_session)):
+    if not settings.FEATURE_BYOP:
+        return HTMLResponse("<h3>BYOP désactivé</h3>", status_code=404)
+    try:
+        pid = _guard_pid(request)
+    except PermissionError:
+        return HTMLResponse("<h3>Non authentifié</h3>", status_code=401)
+    sub = db.query(ByopSubmission).filter_by(id=id, partner_id=pid).first()
+    if not sub: return HTMLResponse("<h3>Introuvable</h3>", status_code=404)
+    short = _try_create_shortlink(sub.asset_id, pid)
+    text = build_share_text(sub.title or "Découverte utile", sub.cta or "Découvre ici →", short, sub.hashtags or settings.SHAREKIT_DEFAULT_HASHTAGS)
+    intents = share_intents(short, text)
+    html = f"""
+    <section style="max-width:860px;margin:40px auto;font-family:system-ui">
+      <h2>Share Kit</h2>
+      <p>Ton lien court : <code>{short}</code></p>
+      <textarea id="sharetext" style="width:100%;height:120px;padding:8px;border:1px solid #ccc">{text}</textarea><br>
+      <button onclick="navigator.clipboard.writeText(document.getElementById('sharetext').value);fetch('/byop/log?ch=copy')" style="padding:8px 12px">Copier</button>
+      <div style="display:flex;gap:10px;margin-top:10px;flex-wrap:wrap">
+        <a target="_blank" href="{intents['whatsapp']}" onclick="fetch('/byop/log?ch=whatsapp')">WhatsApp</a>
+        <a target="_blank" href="{intents['telegram']}" onclick="fetch('/byop/log?ch=telegram')">Telegram</a>
+        <a target="_blank" href="{intents['x']}" onclick="fetch('/byop/log?ch=x')">X / Twitter</a>
+      </div>
+      <details style="margin-top:16px">
+        <summary>Partager par Email</summary>
+        <form method="post" action="/byop/email">
+          <textarea name="emails" placeholder="email1@example.com, email2@example.com" style="width:100%;height:80px;padding:8px;border:1px solid #ccc"></textarea><br>
+          <input type="hidden" name="sid" value="{sub.id}">
+          <button style="padding:8px 12px">Envoyer via Email</button>
+          <p style="opacity:.7">Uniquement des contacts qui ont consentis à recevoir des emails. Un lien de désinscription sera inclus.</p>
+        </form>
+      </details>
+      <p style="margin-top:14px"><a href="/partner/portal">← Retour au portail</a></p>
+    </section>
+    """
+    return HTMLResponse(html)
+
+@router.get("/log")
+def byop_log(request: Request, ch: str = Query(...)):
+    try:
+        pid = _guard_pid(request)
+    except PermissionError:
+        return JSONResponse({"ok": False}, status_code=401)
+    log_share(pid, ch, 0, "")
+    return JSONResponse({"ok": True})
+
+@router.post("/email")
+def byop_email(request: Request, sid: str = Form(...), emails: str = Form("")):
+    if not settings.SHARE_EMAIL_ENABLED:
+        return HTMLResponse("<h3>Email share désactivé</h3>", status_code=400)
+    try:
+        pid = _guard_pid(request)
+    except PermissionError:
+        return HTMLResponse("<h3>Non authentifié</h3>", status_code=401)
+    # rate limit simple
+    if daily_email_count(pid) >= settings.SHARE_EMAIL_DAILY_LIMIT:
+        return HTMLResponse("<h3>Limite journalière atteinte</h3>", status_code=429)
+
+    db = SessionLocal()
+    sub = db.query(ByopSubmission).filter_by(id=sid, partner_id=pid).first()
+    if not sub: return HTMLResponse("<h3>Introuvable</h3>", status_code=404)
+    short = _try_create_shortlink(sub.asset_id, pid)
+    text = build_share_text(sub.title or "Découverte utile", sub.cta or "Découvre ici →", short, sub.hashtags or settings.SHAREKIT_DEFAULT_HASHTAGS)
+
+    to_list = [e.strip() for e in (emails or "").replace(";",",").split(",") if e.strip()]
+    if not to_list:
+        return HTMLResponse("<h3>Aucun email valide</h3>", status_code=400)
+
+    # Envoi via Brevo si dispo; sinon no-op
+    if getattr(settings, "BREVO_API_KEY", ""):
+        b = Brevo(settings.BREVO_API_KEY)
+        subject = (sub.title or "Découverte utile")
+        html = f"<p>{text.replace(chr(10),'<br>')}</p><p style='font-size:12px;opacity:.7'>#ad • Vous pouvez vous désinscrire à tout moment.</p>"
+        to = [{"email": e} for e in to_list]
+        b.send_email(subject=subject, html=html, to=to, sender_email=getattr(settings,"EMAIL_FROM","noreply@contentflow.local"), sender_name=getattr(settings,"EMAIL_FROM_NAME","ContentFlow"), tags=["byop_share"])
+    # log
+    log_share(pid, "email", len(to_list), text)
+    return RedirectResponse(f"/byop/kit?id={sid}", status_code=303)
+
+5) Montage routes (append)
+
+app/main.py (append)
+
+from app.routes import byop_ui as byop_ui_routes
+app.include_router(byop_ui_routes.router)
+
+
+(Si app.routes.byop_ui existe déjà, ne duplique pas l’import — garde une seule ligne.)
+
+6) Lien dans le portail partenaires (append-only)
+
+Dans ton UI/portal partenaires (là où tu listes “Connecter comptes / Assignations”), ajoute un lien vers Créer un post :
+
+<a href="/byop/new" class="btn">Créer un post (BYOP)</a>
+
+7) Acceptation (safe)
+
+Sans FEATURE_BYOP → routes renvoient 404/disabled (pas de crash).
+
+/byop/new → formulaire simple.
+
+Submit → crée Asset(status="new") + ByopSubmission(status="processing"). Le pipeline existant prend le relai (transform, captions).
+
+/byop/kit?id=... → Share Kit : texte prêt à copier + boutons WhatsApp/Telegram/X + email via Brevo (si clé présente).
+
+Rate limit email = SHARE_EMAIL_DAILY_LIMIT/partenaire, logs dans contact_share_logs.
+
+Tracking: les clics passent toujours par shortlink avec pid → attribution revenue OK.
+
+8) Notes compliance
+
+Share Kit ajoute #ad dans le texte (via tes CTA / hashtags).
+
+Email share = opt-in only, lien de désinscription/arrêt via ta page partenaire (au minimum, mention claire).
+
+Pas de DM/automations hors ToS : WhatsApp/Telegram utilisent intents d’ouverture côté client (manuel).
+
+9) Upgrade possible (plus tard, sans risque)
+
+“Credentials-aware publish” pour poster le BYOP direct sur les comptes connectés du partenaire (réutilise PartnerAccount.oauth_json).
+
+Génération auto de 2 variantes (hook/thumbnail) + A/B via ton bandit actuel.
+
+Upload CSV d’emails + double opt-in via Brevo (list management).

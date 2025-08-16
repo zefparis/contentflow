@@ -1,0 +1,190 @@
+But: depuis la page BYOP/Share Kit, permettre au partenaire de pousser son asset via ses comptes connectés (PartnerAccount) sans toucher aux publishers.
+Flow: bouton → POST /api/byop/publish → crée assignments(approved) par plateforme → ton job_partner_publish s’en occupe.
+
+0) ENV (append)
+
+.env.example
+
+FEATURE_BYOP_PUBLISH=true
+BYOP_PUBLISH_PLATFORMS=youtube,pinterest,reddit,instagram
+
+
+app/config.py (append)
+
+class Settings(BaseSettings):
+    # ...
+    FEATURE_BYOP_PUBLISH: bool = True
+    BYOP_PUBLISH_PLATFORMS: str = "youtube,pinterest,reddit,instagram"
+
+1) Route API (nouvelle, append-only)
+
+app/routes/byop_publish.py
+
+from fastapi import APIRouter, Request, Form, Body, Depends
+from fastapi.responses import JSONResponse
+from sqlalchemy import and_
+import datetime as dt, json
+
+from app.config import settings
+from app.db import get_session, SessionLocal
+from app.models import ByopSubmission, PartnerAccount, Assignment, Asset, Partner
+
+router = APIRouter(prefix="/api/byop", tags=["byop"])
+
+def _guard_pid(request: Request) -> str | None:
+    return request.cookies.get("partner_id")
+
+def _platforms_from_env() -> set[str]:
+    try:
+        return set([p.strip() for p in (settings.BYOP_PUBLISH_PLATFORMS or "").split(",") if p.strip()])
+    except Exception:
+        return set()
+
+@router.post("/publish")
+def byop_publish(request: Request, payload: dict = Body(...), db=Depends(get_session)):
+    """
+    payload: { "submissionId": "...", "platforms": ["youtube","pinterest","reddit","instagram"] }
+    Crée des Assignments 'approved' pour les comptes du partenaire sur les plateformes demandées.
+    """
+    if not settings.FEATURE_BYOP_PUBLISH:
+        return JSONResponse({"ok": False, "error": "feature_disabled"}, status_code=400)
+
+    pid = _guard_pid(request)
+    if not pid:
+        return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
+
+    sid = payload.get("submissionId")
+    plats_req = set(payload.get("platforms") or [])
+    plats_env = _platforms_from_env()
+    plats = (plats_req & plats_env) if plats_req else plats_env
+    if not plats:
+        return JSONResponse({"ok": False, "error": "no_platforms"}, status_code=400)
+
+    sub = db.query(ByopSubmission).filter(ByopSubmission.id==sid, ByopSubmission.partner_id==pid).first()
+    if not sub:
+        return JSONResponse({"ok": False, "error": "submission_not_found"}, status_code=404)
+
+    asset = db.query(Asset).filter(Asset.id==sub.asset_id).first()
+    if not asset:
+        return JSONResponse({"ok": False, "error": "asset_not_found"}, status_code=404)
+
+    # comptes du partenaire
+    paccs = db.query(PartnerAccount).filter(PartnerAccount.partner_id==pid, PartnerAccount.enabled==True).all()
+    pacc_by_plat = {}
+    for pa in paccs:
+        pacc_by_plat.setdefault(pa.platform, []).append(pa)
+
+    created = []
+    skipped = []
+
+    for plat in plats:
+        if plat not in pacc_by_plat:
+            skipped.append({"platform": plat, "reason": "no_connected_account"})
+            continue
+        # Création d'un Assignment par compte (capé à 1 par plateforme pour rester safe)
+        pa = pacc_by_plat[plat][0]
+        # dédup: ne pas recréer si déjà existant pour cet asset/partner/plat en pending/approved/posted
+        existing = db.query(Assignment).filter(
+            Assignment.asset_id==asset.id,
+            Assignment.partner_id==pid,
+            Assignment.platform==plat,
+            Assignment.status.in_(("pending","approved","posted"))
+        ).first()
+        if existing:
+            skipped.append({"platform": plat, "reason": "already_assigned"})
+            continue
+
+        asg = Assignment(
+            asset_id = asset.id,
+            partner_id = pid,
+            platform = plat,
+            status = "approved",               # direct approved pour “publier”
+            variation_salt = "byop",           # laisse ton pipeline rajouter des variantes
+            planned_at = dt.datetime.utcnow()
+        )
+        db.add(asg); db.commit()
+        created.append({"platform": plat, "assignment_id": asg.id})
+
+    return {"ok": True, "created": created, "skipped": skipped, "submissionId": sid, "assetId": asset.id}
+
+
+Montage
+
+# app/main.py (append)
+from app.routes import byop_publish as byop_publish_routes
+app.include_router(byop_publish_routes.router)
+
+2) Bouton UI dans le Share Kit (append-only)
+
+Dans ton composant/page BYOP Share/Kit (là où tu montres le lien court et les intents), ajoute un bouton “Publier sur mes comptes” qui tire le nouvel endpoint.
+
+Pseudo-React (adapté vite-fait à ton code)
+
+import { useState } from "react";
+
+function PublishMyAccounts({ submissionId }: { submissionId: string }) {
+  const [loading, setLoading] = useState(false);
+  const [res, setRes] = useState<any>(null);
+
+  async function run() {
+    setLoading(true);
+    try {
+      const r = await fetch("/api/byop/publish", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ submissionId, platforms: ["youtube","pinterest","reddit","instagram"] })
+      });
+      const j = await r.json(); setRes(j);
+    } finally { setLoading(false); }
+  }
+  return (
+    <div style={{marginTop:12}}>
+      <button onClick={run} disabled={loading} className="btn-primary">
+        {loading ? "Publication…" : "Publier sur mes comptes"}
+      </button>
+      {res && (
+        <div style={{marginTop:8, fontSize:12}}>
+          {res.ok ? (
+            <>
+              <div>Créés: {res.created?.map((c:any)=>c.platform).join(", ") || "0"}</div>
+              <div>Passés: {res.skipped?.map((s:any)=>`${s.platform} (${s.reason})`).join(", ") || "-"}</div>
+            </>
+          ) : <div style={{color:"crimson"}}>{res.error}</div>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+Intègre ce composant sous le bloc “Share Kit” (copie/coller dans ta page BYOP).
+
+3) Comportement & sécurité (ce que ça fait / ne fait pas)
+
+✅ Crée 0–4 Assignments (1 par plateforme) status=approved → ton scheduler les prendra en charge (respecte caps/min interval grâce à PartnerAccount).
+
+✅ Dédupe si un assignment existe déjà (pending/approved/posted).
+
+✅ No-crash: si pas de compte connecté pour une plateforme → skipped avec raison.
+
+✅ Feature-flag (FEATURE_BYOP_PUBLISH) : OFF ⇒ endpoint renvoie feature_disabled.
+
+❌ Ne modifie pas tes publishers: on garde le comportement actuel. Si tes publishers sont déjà “credentials-aware”, ils utiliseront les tokens de PartnerAccount. Sinon, ça passe par ta logique existante (et au pire “skipped/failed” côté job, pas de crash).
+
+4) Quick test (2 min)
+# 1) depuis un compte partenaire connecté (cookie partner_id présent)
+curl -X POST http://localhost:8000/api/byop/publish \
+  -H 'Content-Type: application/json' \
+  -d '{"submissionId":"<SID>","platforms":["youtube","pinterest","reddit","instagram"]}'
+# => { ok:true, created:[...], skipped:[...] }
+
+# 2) check DB: assignments créés
+# 3) laisse le scheduler pousser (ou trigger manuellement ton job publish)
+
+5) Next (optionnel, quand tu veux)
+
+Credentials-aware partout: faire accepter oauth_json de PartnerAccount à chaque publish_* (je peux te filer le patch par plateforme).
+
+Barème CPC par partenaire (EPC_7j partner-scoped) affiché sur /partners/earnings.
+
+Referral (?ref=pid) avec bonus 7 jours auto.

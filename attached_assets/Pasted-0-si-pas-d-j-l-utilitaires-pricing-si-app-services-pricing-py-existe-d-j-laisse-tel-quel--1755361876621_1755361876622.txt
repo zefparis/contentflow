@@ -1,0 +1,150 @@
+0) (si pas déjà là) utilitaires pricing
+
+(si app/services/pricing.py existe déjà, laisse tel quel ; sinon skip)
+
+1) Service analytics
+
+app/services/analytics_admin.py
+
+import datetime as dt
+from sqlalchemy import func
+from app.db import SessionLocal
+from app.config import settings
+from app.models import MetricEvent, WalletEntry, Payout, Assignment, PartnerFlag, Partner
+from app.services.pricing import current_offer
+
+def _utcnow(): return dt.datetime.utcnow()
+
+def summary():
+    db = SessionLocal()
+    now = _utcnow()
+    d1 = now - dt.timedelta(days=1)
+    d7 = now - dt.timedelta(days=7)
+    # Clicks / Conv / Revenue
+    clicks_7d = db.query(func.count()).select_from(MetricEvent)\
+        .filter(MetricEvent.kind=="click", MetricEvent.ts>=d7).scalar() or 0
+    conv_7d = db.query(func.count()).select_from(WalletEntry)\
+        .filter(WalletEntry.type=="conversion", WalletEntry.status=="confirmed", WalletEntry.created_at>=d7).scalar() or 0
+    rev_7d = db.query(func.coalesce(func.sum(WalletEntry.amount_eur),0.0)).select_from(WalletEntry)\
+        .filter(WalletEntry.type=="conversion", WalletEntry.status=="confirmed", WalletEntry.created_at>=d7).scalar() or 0.0
+    epc_7d = (float(rev_7d) / clicks_7d) if clicks_7d else 0.0
+
+    # Payouts: confirmed/reserve/paid/available (mêmes règles que ledger)
+    reserve_cutoff = now - dt.timedelta(days=getattr(settings, "PAYOUT_RELEASE_DAYS", 30))
+    confirmed = db.query(func.coalesce(func.sum(WalletEntry.amount_eur),0.0))\
+        .filter(WalletEntry.type=="conversion", WalletEntry.status=="confirmed").scalar() or 0.0
+    to_reserve = db.query(func.coalesce(func.sum(WalletEntry.amount_eur),0.0))\
+        .filter(WalletEntry.type=="conversion", WalletEntry.status=="confirmed", WalletEntry.created_at>reserve_cutoff).scalar() or 0.0
+    reserved = to_reserve * float(getattr(settings, "PAYOUT_RESERVE_PCT", 0.30))
+    paid = abs(db.query(func.coalesce(func.sum(WalletEntry.amount_eur),0.0))\
+        .filter(WalletEntry.type=="payout", WalletEntry.status=="paid").scalar() or 0.0)
+    available = max(0.0, confirmed - reserved - paid)
+
+    # Queue publish
+    try:
+        pending = db.query(func.count()).select_from(Assignment).filter(Assignment.status=="pending").scalar() or 0
+        approved = db.query(func.count()).select_from(Assignment).filter(Assignment.status=="approved").scalar() or 0
+        failed = db.query(func.count()).select_from(Assignment).filter(Assignment.status=="failed").scalar() or 0
+        posted = db.query(func.count()).select_from(Assignment).filter(Assignment.status=="posted").scalar() or 0
+    except Exception:
+        pending=approved=failed=posted=0
+
+    # Risk / health
+    holds = db.query(func.count()).select_from(PartnerFlag).filter(PartnerFlag.flag=="hold").scalar() or 0
+    postbacks_24h = db.query(func.count()).select_from(WalletEntry)\
+        .filter(WalletEntry.type=="conversion", WalletEntry.created_at>=d1).scalar() or 0
+
+    # Partners actifs (clics 7j)
+    partners_active = db.query(func.count(func.distinct(MetricEvent.partner_id)))\
+        .filter(MetricEvent.kind=="click", MetricEvent.ts>=d7, MetricEvent.partner_id.isnot(None)).scalar() or 0
+
+    offer = {}
+    try:
+        offer = current_offer()
+    except Exception:
+        offer = {"headline_cpc": 0.0, "epc_7d": round(epc_7d,2), "terms": {"mode": "unknown"}}
+
+    return {
+        "clicks_7d": int(clicks_7d),
+        "conv_7d": int(conv_7d),
+        "rev_7d": round(float(rev_7d), 2),
+        "epc_7d": round(float(epc_7d), 3),
+        "available": round(float(available),2),
+        "reserved": round(float(reserved),2),
+        "paid": round(float(paid),2),
+        "pending": int(pending), "approved": int(approved), "posted": int(posted), "failed": int(failed),
+        "holds": int(holds), "postbacks_24h": int(postbacks_24h),
+        "partners_active": int(partners_active),
+        "offer": offer,
+    }
+
+2) Route Admin Monitoring
+
+app/routes/admin_monitor.py
+
+from fastapi import APIRouter, Request
+from fastapi.responses import HTMLResponse
+from app.config import settings
+from app.services.analytics_admin import summary
+
+router = APIRouter(prefix="/admin", tags=["admin"])
+
+def _guard(req: Request) -> bool:
+    return req.headers.get("x-admin-secret") == settings.ADMIN_SECRET
+
+@router.get("/monitoring")
+def admin_monitoring(request: Request):
+    if not _guard(request): return HTMLResponse("<h3>Unauthorized</h3>", status_code=401)
+    s = summary()
+    html = f"""
+    <section style="max-width:1100px;margin:32px auto;font-family:system-ui">
+      <h1>Monitoring — ContentFlow</h1>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin-top:12px">
+        <div style="padding:12px;border:1px solid #e5e7eb;border-radius:10px"><b>Revenue 7j</b><div style="font-size:24px">€ {s['rev_7d']:.2f}</div><small>EPC 7j: € {s['epc_7d']:.3f}</small></div>
+        <div style="padding:12px;border:1px solid #e5e7eb;border-radius:10px"><b>Clicks 7j</b><div style="font-size:24px">{s['clicks_7d']}</div><small>Conversions 7j: {s['conv_7d']}</small></div>
+        <div style="padding:12px;border:1px solid #e5e7eb;border-radius:10px"><b>Disponible</b><div style="font-size:24px">€ {s['available']:.2f}</div><small>Réserve: € {s['reserved']:.2f} — Payé: € {s['paid']:.2f}</small></div>
+        <div style="padding:12px;border:1px solid #e5e7eb;border-radius:10px"><b>Offre actuelle</b><div style="font-size:24px">€ {s['offer'].get('headline_cpc',0):.2f}/clic</div><small>Mode: {s['offer'].get('terms',{}).get('mode','?')}</small></div>
+      </div>
+
+      <h3 style="margin-top:16px">Pipeline</h3>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px">
+        <div style="padding:12px;border:1px solid #e5e7eb;border-radius:10px"><b>Assignments</b><div>pending: {s['pending']} · approved: {s['approved']} · posted: {s['posted']} · failed: {s['failed']}</div></div>
+        <div style="padding:12px;border:1px solid #e5e7eb;border-radius:10px"><b>Sécurité</b><div>holds: {s['holds']} · postbacks 24h: {s['postbacks_24h']}</div></div>
+        <div style="padding:12px;border:1px solid #e5e7eb;border-radius:10px"><b>Partenaires actifs</b><div>{s['partners_active']}</div></div>
+      </div>
+
+      <p style="margin-top:16px">
+        <a href="/ops/payouts/pending">Payouts à valider</a> ·
+        <a href="/ops/holds">Holds</a> ·
+        <a href="/admin/payouts">Journal des payouts</a>
+      </p>
+    </section>
+    """
+    return HTMLResponse(html)
+
+
+Montage
+
+# app/main.py (append)
+from app.routes import admin_monitor as admin_monitor_routes
+app.include_router(admin_monitor_routes.router)
+
+Branchage réseaux d’affiliation (cheat-sheet rapide)
+
+Pour chaque réseau/offre :
+
+Lien affilié : ajoute le macro subid. Exemple générique :
+
+Param: subid (ou sid / aff_sub / clickref selon réseau).
+
+Exemple final de redir:
+https://annonceur.com/?affid=XXX&subid=pid:aid:clk
+
+Postback S2S du réseau → ta route :
+GET https://<ton-host>/aff/postback?subid={subid_macro}&amount={payout}&currency={currency}&status={status}&txn_id={transaction_id}&network=<nom>
+
+Si le réseau n’a pas de postback (ex: certains programmes), garde le reporting console et/ou brancher leur API plus tard.
+
+Paiement réseau → tes coordonnées (IBAN/PayPal).
+
+Vérif : appelle une fois le postback à la main pour tester (dup safe via txn_id).

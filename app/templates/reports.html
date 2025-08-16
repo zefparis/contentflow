@@ -1,0 +1,193 @@
+{% extends "base.html" %}
+
+{% block page_title %}Reports & Analytics{% endblock %}
+{% block page_description %}Analyze performance and revenue metrics{% endblock %}
+
+{% block content %}
+<div class="max-w-4xl mx-auto space-y-6">
+    <!-- Revenue Simulator -->
+    <div class="bg-white rounded-xl shadow-sm border border-gray-200">
+        <div class="p-6 border-b border-gray-200">
+            <h3 class="text-lg font-semibold text-gray-900">Revenue Simulator</h3>
+            <p class="text-gray-600 mt-1">Calculate potential earnings based on performance metrics</p>
+        </div>
+        <div class="p-6">
+            <form class="grid grid-cols-1 lg:grid-cols-2 gap-6" hx-post="/api/reports/calculate" hx-target="#revenue-result" hx-trigger="input changed delay:500ms from:input">
+                <div class="space-y-4">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-2">Monthly Views</label>
+                        <input type="number" name="views" class="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-primary-500 focus:border-primary-500" value="100000">
+                        <p class="text-xs text-gray-500 mt-1">Expected number of video views per month</p>
+                    </div>
+
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-2">Click-Through Rate (%)</label>
+                        <input type="number" name="ctr" step="0.01" class="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-primary-500 focus:border-primary-500" value="2.5">
+                        <p class="text-xs text-gray-500 mt-1">Percentage of viewers who click affiliate links</p>
+                    </div>
+
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-2">Earnings Per Click (€)</label>
+                        <input type="number" name="epc" step="0.01" class="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-primary-500 focus:border-primary-500" value="0.75">
+                        <p class="text-xs text-gray-500 mt-1">Average commission per affiliate click</p>
+                    </div>
+
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-2">Content Platform</label>
+                        <select name="platform" class="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-primary-500 focus:border-primary-500">
+                            <option value="instagram">Instagram Reels</option>
+                            <option value="tiktok">TikTok</option>
+                            <option value="youtube">YouTube Shorts</option>
+                            <option value="mixed">Mixed Platforms</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div>
+                    <!-- Revenue Result -->
+                    <div id="revenue-result" class="space-y-4">
+                        <div class="bg-gradient-to-br from-primary-50 to-purple-50 rounded-xl p-6 border border-primary-200">
+                            <h4 class="text-lg font-semibold text-gray-900 mb-4">Projected Monthly Revenue</h4>
+                            <div class="text-center">
+                                <div class="text-4xl font-bold text-primary-600 mb-2">€1,875</div>
+                                <p class="text-sm text-gray-600">Based on 100,000 views × 2.5% CTR × €0.75 EPC</p>
+                            </div>
+                            
+                            <div class="grid grid-cols-2 gap-4 mt-6 pt-4 border-t border-primary-200">
+                                <div class="text-center">
+                                    <div class="text-xl font-semibold text-gray-900">2,500</div>
+                                    <p class="text-xs text-gray-600">Monthly Clicks</p>
+                                </div>
+                                <div class="text-center">
+                                    <div class="text-xl font-semibold text-gray-900">€22,500</div>
+                                    <p class="text-xs text-gray-600">Annual Projection</p>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="space-y-3">
+                            <div class="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                                <span class="text-sm text-gray-600">Daily Revenue</span>
+                                <span class="font-medium text-gray-900">€62.50</span>
+                            </div>
+                            <div class="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                                <span class="text-sm text-gray-600">Weekly Revenue</span>
+                                <span class="font-medium text-gray-900">€437.50</span>
+                            </div>
+                            <div class="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                                <span class="text-sm text-gray-600">Revenue per 1000 Views</span>
+                                <span class="font-medium text-gray-900">€18.75</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Performance Analytics -->
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div class="bg-white rounded-xl shadow-sm border border-gray-200">
+            <div class="p-6 border-b border-gray-200">
+                <h3 class="text-lg font-semibold text-gray-900">Performance Overview</h3>
+            </div>
+            <div class="p-6">
+                <div class="space-y-4">
+                    <div class="flex items-center justify-between p-4 bg-blue-50 rounded-lg border border-blue-200">
+                        <div class="flex items-center space-x-3">
+                            <i class="fas fa-eye text-blue-600 text-xl"></i>
+                            <div>
+                                <p class="font-medium text-gray-900">Total Views</p>
+                                <p class="text-sm text-gray-600">This month</p>
+                            </div>
+                        </div>
+                        <div class="text-right">
+                            <p class="text-lg font-semibold text-gray-900">2.4M</p>
+                            <p class="text-sm text-green-600">+18% vs last month</p>
+                        </div>
+                    </div>
+
+                    <div class="flex items-center justify-between p-4 bg-green-50 rounded-lg border border-green-200">
+                        <div class="flex items-center space-x-3">
+                            <i class="fas fa-mouse-pointer text-green-600 text-xl"></i>
+                            <div>
+                                <p class="font-medium text-gray-900">Total Clicks</p>
+                                <p class="text-sm text-gray-600">This month</p>
+                            </div>
+                        </div>
+                        <div class="text-right">
+                            <p class="text-lg font-semibold text-gray-900">60K</p>
+                            <p class="text-sm text-green-600">+12% vs last month</p>
+                        </div>
+                    </div>
+
+                    <div class="flex items-center justify-between p-4 bg-purple-50 rounded-lg border border-purple-200">
+                        <div class="flex items-center space-x-3">
+                            <i class="fas fa-euro-sign text-purple-600 text-xl"></i>
+                            <div>
+                                <p class="font-medium text-gray-900">Total Revenue</p>
+                                <p class="text-sm text-gray-600">This month</p>
+                            </div>
+                        </div>
+                        <div class="text-right">
+                            <p class="text-lg font-semibold text-gray-900">€45K</p>
+                            <p class="text-sm text-green-600">+25% vs last month</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="bg-white rounded-xl shadow-sm border border-gray-200">
+            <div class="p-6 border-b border-gray-200">
+                <h3 class="text-lg font-semibold text-gray-900">Platform Performance</h3>
+            </div>
+            <div class="p-6">
+                <div class="space-y-4">
+                    <div class="flex items-center justify-between p-4 bg-purple-50 rounded-lg border border-purple-200">
+                        <div class="flex items-center space-x-3">
+                            <i class="fab fa-instagram text-purple-600 text-xl"></i>
+                            <div>
+                                <p class="font-medium text-gray-900">Instagram</p>
+                                <p class="text-sm text-gray-600">45 posts this month</p>
+                            </div>
+                        </div>
+                        <div class="text-right">
+                            <p class="text-lg font-semibold text-gray-900">€18.2K</p>
+                            <p class="text-sm text-green-600">+15% vs last month</p>
+                        </div>
+                    </div>
+
+                    <div class="flex items-center justify-between p-4 bg-gray-50 rounded-lg border border-gray-200">
+                        <div class="flex items-center space-x-3">
+                            <i class="fab fa-tiktok text-black text-xl"></i>
+                            <div>
+                                <p class="font-medium text-gray-900">TikTok</p>
+                                <p class="text-sm text-gray-600">32 posts this month</p>
+                            </div>
+                        </div>
+                        <div class="text-right">
+                            <p class="text-lg font-semibold text-gray-900">€14.7K</p>
+                            <p class="text-sm text-green-600">+8% vs last month</p>
+                        </div>
+                    </div>
+
+                    <div class="flex items-center justify-between p-4 bg-red-50 rounded-lg border border-red-200">
+                        <div class="flex items-center space-x-3">
+                            <i class="fab fa-youtube text-red-600 text-xl"></i>
+                            <div>
+                                <p class="font-medium text-gray-900">YouTube</p>
+                                <p class="text-sm text-gray-600">28 posts this month</p>
+                            </div>
+                        </div>
+                        <div class="text-right">
+                            <p class="text-lg font-semibold text-gray-900">€12.1K</p>
+                            <p class="text-sm text-green-600">+22% vs last month</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

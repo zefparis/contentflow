@@ -1,0 +1,230 @@
+0) ENV & Config (append-only)
+
+.env.example (append)
+
+PAYOUT_MIN_EUR=10
+PAYOUT_METHODS=paypal,bank
+
+
+app/config.py (append)
+
+class Settings(BaseSettings):
+    # ...
+    PAYOUT_MIN_EUR: float = 10.0
+    PAYOUT_METHODS: str = "paypal,bank"
+
+1) DB (append-only)
+
+infra/migrations.sql (append)
+
+CREATE TABLE IF NOT EXISTS withdraw_requests (
+  id TEXT PRIMARY KEY,
+  partner_id TEXT NOT NULL REFERENCES partners(id) ON DELETE CASCADE,
+  amount_eur REAL NOT NULL,
+  method TEXT NOT NULL,
+  details TEXT,                -- ex: email PayPal / IBAN masqué
+  status TEXT NOT NULL DEFAULT 'requested', -- requested|approved|paid|rejected
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  processed_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_withdraw_partner ON withdraw_requests(partner_id);
+
+
+app/models.py (append)
+
+class WithdrawRequest(Base):
+    __tablename__ = "withdraw_requests"
+    id = sa.Column(sa.String, primary_key=True, default=lambda: str(uuid4()))
+    partner_id = sa.Column(sa.String, sa.ForeignKey("partners.id", ondelete="CASCADE"), index=True)
+    amount_eur = sa.Column(sa.Float, nullable=False)
+    method = sa.Column(sa.String, nullable=False)
+    details = sa.Column(sa.String, nullable=True)
+    status = sa.Column(sa.String, nullable=False, default="requested")
+    created_at = sa.Column(sa.DateTime(timezone=True), server_default=sa.func.now())
+    processed_at = sa.Column(sa.DateTime(timezone=True), nullable=True)
+
+2) Services (ne touche rien d’existant)
+
+app/services/earnings.py (new)
+
+import datetime as dt, json
+from sqlalchemy import func
+from app.db import SessionLocal
+from app.models import MetricEvent, Payout, WithdrawRequest, Partner
+from app.config import settings
+
+def _since(days:int): return dt.datetime.utcnow() - dt.timedelta(days=days)
+
+def mask_email(e:str) -> str:
+    if "@" not in (e or ""): return "anon"
+    u,d = e.split("@",1); return (u[:2] + "…" + u[-1:]) + "@" + d
+
+def partner_balance(partner_id:str, days:int=90) -> dict:
+    db = SessionLocal()
+    since = _since(days)
+    clicks = db.query(func.count()).select_from(MetricEvent)\
+        .filter(MetricEvent.kind=="click", MetricEvent.ts>=since, MetricEvent.partner_id==partner_id).scalar() or 0
+    # total revenu estimé = clicks * EPC effectif (si tu stockes amount_eur par click, remplace)
+    epc = float(getattr(settings, "DEFAULT_EPC_EUR", 0.20))
+    gross = clicks * epc
+    # total payé
+    paid = db.query(func.coalesce(func.sum(Payout.amount_due_eur),0.0))\
+        .filter(Payout.partner_id==partner_id, Payout.status=="paid").scalar() or 0.0
+    # pending withdraw
+    pending = db.query(func.coalesce(func.sum(WithdrawRequest.amount_eur),0.0))\
+        .filter(WithdrawRequest.partner_id==partner_id, WithdrawRequest.status.in_(("requested","approved"))).scalar() or 0.0
+    available = max(0.0, gross - paid - pending)
+    return {"clicks": clicks, "epc": epc, "gross": round(gross,2), "paid": round(paid,2),
+            "pending": round(pending,2), "available": round(available,2)}
+
+def leaderboard(days:int=7, limit:int=20):
+    db = SessionLocal(); since = _since(days)
+    rows = db.query(MetricEvent.partner_id, func.count().label("clicks"))\
+        .filter(MetricEvent.kind=="click", MetricEvent.ts>=since, MetricEvent.partner_id.isnot(None))\
+        .group_by(MetricEvent.partner_id).order_by(func.count().desc()).limit(limit).all()
+    # map partner emails
+    ids = [r[0] for r in rows]
+    pmap = {p.id:p.email for p in db.query(Partner).filter(Partner.id.in_(ids)).all()}
+    out=[]; rank=1
+    for pid, c in rows:
+        out.append({"rank":rank, "pid":pid, "label":mask_email(pmap.get(pid,"")), "clicks":c})
+        rank+=1
+    return out
+
+def request_withdraw(partner_id:str, amount:float, method:str, details:str):
+    db = SessionLocal()
+    bal = partner_balance(partner_id)["available"]
+    if amount <= 0 or amount > bal or amount < settings.PAYOUT_MIN_EUR:
+        return {"ok": False, "error": "invalid_amount_or_threshold"}
+    if method not in (settings.PAYOUT_METHODS or "paypal").split(","):
+        return {"ok": False, "error": "invalid_method"}
+    wr = WithdrawRequest(partner_id=partner_id, amount_eur=amount, method=method, details=details or "")
+    db.add(wr); db.commit()
+    return {"ok": True, "id": wr.id}
+
+3) Routes UI (append-only)
+
+app/routes/partners_ui.py (new)
+
+from fastapi import APIRouter, Request, Depends, Form, Query
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from app.db import get_session
+from app.config import settings
+from app.services.earnings import leaderboard, partner_balance, mask_email, request_withdraw
+from app.models import Partner
+
+router = APIRouter(tags=["partners_ui"])
+
+# Landing publique
+@router.get("/partners")
+def partners_landing():
+    html = """
+    <section style="max-width:860px;margin:40px auto;font-family:system-ui">
+      <h1>Plug & Earn — Deviens partenaire</h1>
+      <p>Connecte tes comptes. Valide nos posts. Gagne <b>jusqu’à 0,12 €/clic</b>.</p>
+      <ul>
+        <li>✅ Zéro création de contenu</li>
+        <li>✅ Cap anti-spam & contrôle manuel</li>
+        <li>✅ Paiement dès {min}€ — {methods}</li>
+      </ul>
+      <form method="post" action="/partner/magic" style="margin:16px 0">
+        <input name="email" placeholder="ton@email" style="padding:8px;border:1px solid #ccc">
+        <button style="padding:8px 12px">Recevoir le lien d’accès</button>
+      </form>
+      <p><a href="/partners/leaderboard">Voir le leaderboard</a> · <a href="/partners/faq">FAQ</a></p>
+    </section>
+    """.format(min=int(settings.PAYOUT_MIN_EUR), methods=settings.PAYOUT_METHODS)
+    return HTMLResponse(html)
+
+# Leaderboard anonymisé
+@router.get("/partners/leaderboard")
+def partners_leaderboard(days: int = Query(7)):
+    rows = leaderboard(days=days, limit=20)
+    html = "<section style='max-width:860px;margin:40px auto;font-family:system-ui'><h2>Leaderboard ({} j)</h2><ol>".format(days)
+    if not rows: html += "<p>Aucun clic récent.</p>"
+    for r in rows:
+        html += f"<li>#{r['rank']} — {r['label']} — {r['clicks']} clics</li>"
+    html += "</ol><p><a href='/partners'>← Retour</a></p></section>"
+    return HTMLResponse(html)
+
+# Earnings (nécessite cookie partner_id posé par /partner/login)
+@router.get("/partners/earnings")
+def partners_earnings(request: Request, db=Depends(get_session)):
+    pid = request.cookies.get("partner_id")
+    if not pid: return HTMLResponse("<h3>Non authentifié</h3>", status_code=401)
+    p = db.query(Partner).filter_by(id=pid).first()
+    if not p: return HTMLResponse("<h3>Partner introuvable</h3>", status_code=404)
+    bal = partner_balance(pid)
+    methods = "".join([f"<option value='{m.strip()}'>{m.strip()}</option>" for m in (settings.PAYOUT_METHODS or 'paypal').split(",")])
+    html = f"""
+    <section style="max-width:860px;margin:40px auto;font-family:system-ui">
+      <h2>Mes gains</h2>
+      <p>Compte: <b>{mask_email(p.email)}</b></p>
+      <ul>
+        <li>Clicks (90j): <b>{bal['clicks']}</b></li>
+        <li>EPC estimé: <b>{bal['epc']:.2f} €</b></li>
+        <li>Gains bruts: <b>{bal['gross']:.2f} €</b></li>
+        <li>En attente: <b>{bal['pending']:.2f} €</b></li>
+        <li>Déjà payé: <b>{bal['paid']:.2f} €</b></li>
+        <li><u>Disponible</u>: <b>{bal['available']:.2f} €</b></li>
+      </ul>
+      <h3>Retirer</h3>
+      <form method="post" action="/partners/withdraw">
+        <input type="number" step="0.01" min="{settings.PAYOUT_MIN_EUR}" max="{bal['available']}" name="amount" placeholder="Montant (≥ {settings.PAYOUT_MIN_EUR}€)" style="padding:8px;border:1px solid #ccc">
+        <select name="method" style="padding:8px;border:1px solid #ccc">{methods}</select>
+        <input name="details" placeholder="Email PayPal / IBAN (masqué)" style="padding:8px;border:1px solid #ccc;width:320px">
+        <button style="padding:8px 12px">Demander le retrait</button>
+      </form>
+      <p style="margin-top:12px"><a href="/partner/portal">Gérer mes comptes</a> · <a href="/partners">Landing</a></p>
+    </section>
+    """
+    return HTMLResponse(html)
+
+@router.post("/partners/withdraw")
+def partners_withdraw(request: Request, amount: float = Form(...), method: str = Form(...), details: str = Form("")):
+    pid = request.cookies.get("partner_id")
+    if not pid: return HTMLResponse("<h3>Non authentifié</h3>", status_code=401)
+    res = request_withdraw(pid, float(amount), method.strip(), details.strip())
+    if not res.get("ok"):
+        return HTMLResponse("<h3>Refusé</h3><p>Vérifie le montant (≥ seuil & ≤ disponible) et la méthode.</p><p><a href='/partners/earnings'>← Retour</a></p>", status_code=400)
+    return RedirectResponse("/partners/earnings", status_code=303)
+
+@router.get("/partners/faq")
+def partners_faq():
+    html = """
+    <section style="max-width:860px;margin:40px auto;font-family:system-ui">
+      <h2>FAQ Partenaires</h2>
+      <details><summary>Comment je gagne de l’argent ?</summary><p>Tu gagnes au <b>clic</b> sur nos liens (#ad), ou en partage revenu. Transparence via dashboard.</p></details>
+      <details><summary>Contrôle de ce qui est posté ?</summary><p>Par défaut, <b>review</b> manuelle. Tu peux activer <b>autopublish</b> avec cap/jour.</p></details>
+      <details><summary>Ban / sécurité ?</summary><p>Anti-spam intégré: caps, aléa, variations visuelles, respect des règles plateforme.</p></details>
+      <details><summary>Paiement</summary><p>Seuil <b>{min}€</b>. Méthodes: {methods}. Demande depuis <a href='/partners/earnings'>Earnings</a>.</p></details>
+      <p><a href="/partners">← Retour</a></p>
+    </section>""".format(min=int(settings.PAYOUT_MIN_EUR), methods=settings.PAYOUT_METHODS)
+    return HTMLResponse(html)
+
+4) Montage (append-only)
+
+app/main.py (append)
+
+from app.routes import partners_ui as partners_ui_routes
+app.include_router(partners_ui_routes.router)
+
+5) (Optionnel) Menu (append-only, si tu as une navbar)
+
+app/templates/base.html (append près de la nav)
+
+<a href="/partners">Partners</a>
+<a href="/partners/leaderboard">Leaderboard</a>
+<a href="/partners/earnings">Earnings</a>
+
+6) Acceptation rapide
+
+/partners : landing + formulaire magic-link (utilise déjà ton endpoint /partner/magic).
+
+/partners/leaderboard : top 20 anonymisé (7 jours par défaut).
+
+/partners/earnings : nécessite cookie partner_id (posé par /partner/login?token=... déjà implémenté) → montre solde & formulaire Withdraw.
+
+Withdraw stub : crée une ligne withdraw_requests status requested, aucun virement n’est fait (tu gères l’exécution côté ops/Stripe/PayPal plus tard).
+
+Aucun override des publishers/autopilote — append-only partout.

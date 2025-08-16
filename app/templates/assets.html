@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+
+{% block page_title %}Assets{% endblock %}
+{% block page_description %}Manage your content assets and transformations{% endblock %}
+
+{% block header_actions %}
+<button 
+    class="px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition-colors text-sm font-medium"
+    hx-post="/api/jobs/transform"
+    hx-trigger="click"
+    hx-swap="none"
+>
+    <i class="fas fa-cog mr-2"></i>
+    Transform All
+</button>
+{% endblock %}
+
+{% block content %}
+<div class="bg-white rounded-xl shadow-sm border border-gray-200">
+    <div class="p-6 border-b border-gray-200">
+        <div class="flex items-center justify-between">
+            <h3 class="text-lg font-semibold text-gray-900">Assets</h3>
+            <div class="flex items-center space-x-3">
+                <select class="border border-gray-300 rounded-lg px-3 py-2 text-sm">
+                    <option>All Status</option>
+                    <option>New</option>
+                    <option>Ready</option>
+                    <option>Failed</option>
+                </select>
+            </div>
+        </div>
+    </div>
+    <div class="overflow-x-auto">
+        <table class="w-full">
+            <thead class="bg-gray-50 border-b border-gray-200">
+                <tr>
+                    <th class="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">Asset</th>
+                    <th class="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">Source</th>
+                    <th class="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
+                    <th class="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">Duration</th>
+                    <th class="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">Created</th>
+                    <th class="text-right px-6 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-gray-200">
+                {% for asset in assets %}
+                <tr class="hover:bg-gray-50">
+                    <td class="px-6 py-4">
+                        <div class="flex items-center space-x-3">
+                            <div class="w-10 h-10 bg-gray-200 rounded-lg flex items-center justify-center">
+                                <i class="fas fa-video text-gray-500"></i>
+                            </div>
+                            <div>
+                                <p class="font-medium text-gray-900">Asset #{{ asset.id }}</p>
+                                <p class="text-sm text-gray-500">{{ asset.s3_key or 'Processing...' }}</p>
+                            </div>
+                        </div>
+                    </td>
+                    <td class="px-6 py-4">
+                        <span class="px-2 py-1 {% if asset.source and asset.source.kind == 'rss' %}bg-blue-100 text-blue-800{% elif asset.source and asset.source.kind == 'youtube_cc' %}bg-red-100 text-red-800{% else %}bg-green-100 text-green-800{% endif %} rounded-full text-xs font-medium">
+                            {{ asset.source.kind|upper if asset.source else 'Unknown' }}
+                        </span>
+                    </td>
+                    <td class="px-6 py-4">
+                        <span class="px-2 py-1 {% if asset.status == 'ready' %}bg-green-100 text-green-800{% elif asset.status == 'new' %}bg-yellow-100 text-yellow-800{% else %}bg-red-100 text-red-800{% endif %} rounded-full text-xs font-medium">
+                            {{ asset.status|title }}
+                        </span>
+                    </td>
+                    <td class="px-6 py-4 text-sm text-gray-900">
+                        {% if asset.duration %}
+                            {{ "%.1f"|format(asset.duration) }}s
+                        {% else %}
+                            —
+                        {% endif %}
+                    </td>
+                    <td class="px-6 py-4 text-sm text-gray-500">
+                        {{ asset.created_at.strftime('%Y-%m-%d %H:%M') }}
+                    </td>
+                    <td class="px-6 py-4 text-right">
+                        {% if asset.status == 'new' %}
+                        <button 
+                            class="text-primary-600 hover:text-primary-700 text-sm font-medium mr-3"
+                            hx-post="/api/assets/{{ asset.id }}/transform"
+                            hx-trigger="click"
+                            hx-swap="none"
+                        >
+                            Transform
+                        </button>
+                        {% endif %}
+                        <button class="text-gray-400 hover:text-gray-600">
+                            <i class="fas fa-ellipsis-h"></i>
+                        </button>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

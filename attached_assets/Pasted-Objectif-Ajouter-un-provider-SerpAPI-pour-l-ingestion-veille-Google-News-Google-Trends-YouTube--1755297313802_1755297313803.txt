@@ -1,0 +1,303 @@
+Objectif : Ajouter un provider SerpAPI pour l’ingestion/veille (Google News, Google Trends, YouTube Search/Video) et l’intégrer à services/sources.py, au scheduler, et à l’UI /sources. Le code doit booter même sans clé (fallback no-op), et mapper les résultats vers des Assets ou de nouvelles Sources (queries YouTube).
+
+0) Dépendances & ENV
+requirements.txt (append)
+google-search-results==2.4.2
+Pillow==10.4.0
+imagehash==4.3.1
+
+.env.example (append)
+SERPAPI_KEY=
+SERPAPI_HL=fr
+SERPAPI_GL=FR
+SERPAPI_CACHE_TTL=3600   # s, côté app (memoization soft)
+SERPAPI_MAX_RESULTS=10   # cap par requête
+
+app/config.py (append)
+class Settings(BaseSettings):
+    # ... (existant)
+    SERPAPI_KEY: str = ""
+    SERPAPI_HL: str = "fr"
+    SERPAPI_GL: str = "FR"
+    SERPAPI_CACHE_TTL: int = 3600
+    SERPAPI_MAX_RESULTS: int = 10
+
+1) Modèle & Migrations (léger)
+app/models.py (patch léger)
+
+Étendre Source.kind pour accepter : "serp_youtube" | "serp_news" | "serp_trends".
+
+Ajouter champ optionnel params_json à Source si absent.
+
+class Source(Base):
+    __tablename__ = "sources"
+    id = sa.Column(sa.String, primary_key=True, default=lambda: str(uuid4()))
+    kind = sa.Column(sa.String, index=True)  # rss | youtube_cc | stock | serp_youtube | serp_news | serp_trends
+    url = sa.Column(sa.String, nullable=True)   # pour SERP: on stocke la "query" ici par simplicité
+    params_json = sa.Column(sa.Text, nullable=False, default="{}")  # options provider (locale, filtres…)
+    enabled = sa.Column(sa.Boolean, default=True)
+    created_at = sa.Column(sa.DateTime(timezone=True), server_default=sa.func.now())
+
+infra/migrations.sql (append)
+ALTER TABLE sources ADD COLUMN IF NOT EXISTS params_json TEXT NOT NULL DEFAULT '{}';
+
+2) Provider SerpAPI
+app/providers/serpapi_provider.py (nouveau)
+import time, os
+from typing import Any, Dict, List, Optional
+from serpapi import GoogleSearch
+from functools import lru_cache
+from app.config import settings
+
+def _enabled() -> bool:
+    return bool(settings.SERPAPI_KEY)
+
+def _run(engine: str, **kw) -> Dict[str, Any]:
+    if not _enabled():
+        return {}
+    params = {
+        "engine": engine,
+        "api_key": settings.SERPAPI_KEY,
+        "hl": settings.SERPAPI_HL,
+        "gl": settings.SERPAPI_GL,
+    }
+    params.update({k: v for k, v in kw.items() if v is not None})
+    return GoogleSearch(params).get_dict()
+
+# --- Caches doux pour limiter la facture (process-level) ---
+def _cache_key(engine: str, **kw) -> str:
+    return engine + "|" + "|".join(f"{k}={kw[k]}" for k in sorted(kw))
+
+_cache: Dict[str, tuple[float, Dict[str, Any]]] = {}
+
+def _cached(engine: str, ttl: int, **kw) -> Dict[str, Any]:
+    key = _cache_key(engine, **kw)
+    now = time.time()
+    if key in _cache:
+        ts, data = _cache[key]
+        if now - ts < ttl:
+            return data
+    data = _run(engine, **kw)
+    _cache[key] = (now, data)
+    return data
+
+# --- Expositions haut-niveau ---
+def youtube_search(q: str, max_results: int|None=None) -> List[Dict[str, Any]]:
+    max_results = max_results or settings.SERPAPI_MAX_RESULTS
+    d = _cached("youtube", settings.SERPAPI_CACHE_TTL, search_query=q)
+    res = d.get("video_results") or d.get("items") or []
+    return res[:max_results]
+
+def youtube_video(video_id: str) -> Dict[str, Any]:
+    return _cached("youtube_video", settings.SERPAPI_CACHE_TTL, v=video_id)
+
+def google_news(q: str, max_results: int|None=None) -> List[Dict[str, Any]]:
+    max_results = max_results or settings.SERPAPI_MAX_RESULTS
+    d = _cached("google_news", settings.SERPAPI_CACHE_TTL, q=q)
+    return (d.get("news_results") or [])[:max_results]
+
+def trends_trending_now(category_id: Optional[int]=None) -> List[Dict[str, Any]]:
+    kw = {}
+    if category_id is not None:
+        kw["category_id"] = category_id
+    d = _cached("google_trends_trending_now", settings.SERPAPI_CACHE_TTL, **kw)
+    return d.get("stories") or []
+
+3) Dédup thumbnail (utilitaire pHash si pas déjà présent)
+app/utils/dedupe.py (nouveau, simple)
+import io, httpx
+from PIL import Image
+import imagehash
+
+def phash_from_url(url: str) -> str|None:
+    try:
+        r = httpx.get(url, timeout=10)
+        r.raise_for_status()
+        img = Image.open(io.BytesIO(r.content)).convert("RGB")
+        return str(imagehash.phash(img))
+    except Exception:
+        return None
+
+def hamming(a: str, b: str) -> int:
+    if not a or not b: return 999
+    return imagehash.hex_to_hash(a) - imagehash.hex_to_hash(b)
+
+4) Ingestion SerpAPI → Assets/Sources
+app/services/sources.py (patch : ajouter 3 fonctions + dispatcher)
+import json, re
+from app.providers import serpapi_provider as serp
+from app.utils.dedupe import phash_from_url, hamming
+from app.models import Source, Asset
+from app.db import SessionLocal
+from app.utils.logger import log
+
+CC_HINTS = ("Creative Commons", "CC-BY", "CC BY", "CCBY")
+
+def _maybe_cc_badge(item: dict) -> bool:
+    badges = item.get("badges") or []
+    text = " ".join(badges) + " " + (item.get("title") or "")
+    return any(k.lower() in text.lower() for k in CC_HINTS)
+
+def ingest_serp_youtube(db, src: Source, limit: int = 10) -> int:
+    q = (src.url or "").strip()
+    if not q:
+        return 0
+    items = serp.youtube_search(q, max_results=limit)
+    created = 0
+    for it in items:
+        vid = it.get("video_id") or it.get("id")
+        if not vid: continue
+        thumbs = it.get("thumbnails") or []
+        thumb_url = thumbs[0].get("static") if thumbs and isinstance(thumbs[0], dict) else (it.get("thumbnail") or None)
+        p = phash_from_url(thumb_url) if thumb_url else None
+
+        # dédup simple sur meta: url vidéo
+        video_url = f"https://www.youtube.com/watch?v={vid}"
+        exists = db.query(Asset).filter(Asset.meta_json.contains(vid)).first()
+        if exists: continue
+
+        meta = {
+            "source": "serpapi.youtube",
+            "query": q,
+            "title": it.get("title"),
+            "channel": (it.get("channel", {}) or {}).get("name") or it.get("channel"),
+            "video_id": vid,
+            "url": video_url,
+            "thumbnail": thumb_url,
+            "published": it.get("published_date") or it.get("date"),
+            "views": it.get("views"),
+            "cc_hint": _maybe_cc_badge(it),
+            "license": "unknown"
+        }
+        a = Asset(source_id=src.id, status="new", meta_json=json.dumps(meta), s3_key=None, duration=None, lang="fr")
+        if p: a.phash = p
+        db.add(a); created += 1
+    db.commit()
+    log("ingest_serp_youtube", {"source_id": src.id, "created": created, "q": q})
+    return created
+
+def ingest_serp_news(db, src: Source, limit: int = 10, spawn_youtube_sources: bool = True, max_spawn: int = 5) -> int:
+    q = (src.url or "").strip()
+    rows = serp.google_news(q, max_results=limit)
+    spawned = 0
+    for r in rows:
+        title = r.get("title") or ""
+        if not title: continue
+        if spawn_youtube_sources and spawned < max_spawn:
+            # crée/active une source de type serp_youtube pour cette "topic query"
+            exists = db.query(Source).filter_by(kind="serp_youtube", url=title).first()
+            if not exists:
+                news_params = json.dumps({"origin": "news", "news_url": r.get("link")})
+                db.add(Source(kind="serp_youtube", url=title, params_json=news_params, enabled=True))
+                spawned += 1
+    db.commit()
+    log("ingest_serp_news", {"source_id": src.id, "spawned_serp_youtube": spawned, "q": q})
+    return spawned
+
+def ingest_serp_trends(db, src: Source, category_id: int|None=None, max_spawn: int = 5) -> int:
+    stories = serp.trends_trending_now(category_id=category_id)
+    spawned = 0
+    for s in stories:
+        # story.title ou entity_names → query YouTube
+        title = s.get("title") or (", ".join(s.get("entity_names") or []) if s.get("entity_names") else None)
+        if not title: continue
+        exists = db.query(Source).filter_by(kind="serp_youtube", url=title).first()
+        if not exists and spawned < max_spawn:
+            db.add(Source(kind="serp_youtube", url=title, params_json=json.dumps({"origin":"trends"}), enabled=True))
+            spawned += 1
+    db.commit()
+    log("ingest_serp_trends", {"source_id": src.id, "spawned_serp_youtube": spawned})
+    return spawned
+
+def ingest_dispatch_serp(db, src: Source) -> int:
+    if src.kind == "serp_youtube":
+        return ingest_serp_youtube(db, src, limit=settings.SERPAPI_MAX_RESULTS)
+    if src.kind == "serp_news":
+        return ingest_serp_news(db, src)
+    if src.kind == "serp_trends":
+        cat = None
+        try:
+            p = json.loads(src.params_json or "{}"); cat = p.get("category_id")
+        except Exception:
+            pass
+        return ingest_serp_trends(db, src, category_id=cat)
+    return 0
+
+5) Compliance (ajustement risque)
+app/services/compliance.py (patch rapide)
+def compute_risk(asset, plan=None) -> float:
+    # ... existant
+    meta = json.loads(asset.meta_json or "{}")
+    risk = 0.0
+    # +0.5 si licence inconnue et source serp_youtube
+    if meta.get("source") == "serpapi.youtube" and meta.get("license","unknown") == "unknown":
+        risk += 0.5
+        if meta.get("cc_hint"):
+            risk -= 0.2  # soupçon CC → un peu moins risqué, reste en review
+    # autres règles existantes...
+    return max(0.0, min(1.0, risk))
+
+6) Scheduler & Routes jobs
+app/services/scheduler.py (patch)
+
+Dans job_ingest(), appeler aussi ingest_dispatch_serp pour toutes Source.enabled dont kind commence par serp_.
+
+Ajouter un endpoint manuel POST /jobs/ingest_serp pour déclencher uniquement SerpAPI.
+
+app/routes/jobs.py (append)
+@router.post("/jobs/ingest_serp")
+def jobs_ingest_serp(db=Depends(get_session)):
+    from app.models import Source
+    from app.services.sources import ingest_dispatch_serp
+    created = 0
+    for src in db.query(Source).filter(Source.enabled==True, Source.kind.in_(["serp_youtube","serp_news","serp_trends"])).all():
+        created += ingest_dispatch_serp(db, src)
+    return {"ok": True, "serp_created_or_spawned": created}
+
+7) UI — Sources (ajout types SerpAPI)
+app/routes/sources.py (append support)
+
+Autoriser kind ∈ {"serp_youtube","serp_news","serp_trends"}.
+
+Pour serp_youtube, url = query (ex: “VPN review 2025”).
+
+Pour serp_news, url = query (ex: “intelligence artificielle”).
+
+Pour serp_trends, params_json peut contenir { "category_id": 18 } (tech).
+
+Form hint : ajouter un <select> des nouveaux types + input “Query/Category”.
+
+8) Transform : garde-fou (si asset YouTube non CC)
+app/services/assets.py (patch léger)
+
+Si meta.source == "serpapi.youtube" et que meta.license == "unknown" → laisser status="new" mais tagger pour “Review” (ou bloquer autopost via risk >= 0.2 déjà géré).
+
+Option : si meta.cc_hint true → autoriser plan & transform uniquement si tu as un téléchargement légal (non inclus ici). Par défaut, pas de download YouTube dans ce patch.
+
+9) Acceptance (doit passer sans clé)
+
+Avec SERPAPI_KEY vide → /jobs/ingest_serp retourne {ok: true, serp_created_or_spawned: 0} et ne crashe pas.
+
+En mettant SERPAPI_KEY, en créant :
+
+Source(kind="serp_news", url="intelligence artificielle") → /jobs/ingest_serp spawn ≤5 sources serp_youtube (topics).
+
+Source(kind="serp_trends") → spawn ≤5 serp_youtube.
+
+Source(kind="serp_youtube", url="VPN review 2025") → ingère ≤ SERPAPI_MAX_RESULTS Asset.new avec meta.video_id, meta.url, meta.thumbnail, phash rempli si possible.
+
+Les assets créés via SerpAPI portent meta.source="serpapi.youtube" et passent par compliance (risk ≥ 0.3–0.5), donc autopost bloqué sauf review/override (OK).
+
+UI /sources permet de créer ces types; /jobs/ingest_serp déclenche la collecte.
+
+10) Notes d’usage (README, bref)
+
+SerpAPI est utilisé pour découverte/veille et métadatas publiques. Pas pour publier ni récupérer analytics privées.
+
+Les vidéos YouTube ingérées via SerpAPI ne doivent pas être re-uploadées sauf licence CC-BY explicite et process de téléchargement légal (non inclus).
+
+serp_news/serp_trends servent à générer des queries → serp_youtube → Assets.
+
+Ajuste SERPAPI_MAX_RESULTS et SERPAPI_CACHE_TTL selon budget.
+
+Génère maintenant ces fichiers/patchs avec code prêt à l’emploi, sans TODO, et conserve tout le reste de ContentFlow inchangé.

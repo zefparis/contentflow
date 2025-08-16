@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}ContentFlow - Automated Content Pipeline{% endblock %}</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/htmx.org@1.9.10"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        'sans': ['Inter', 'system-ui', 'sans-serif'],
+                    },
+                    colors: {
+                        primary: {
+                            50: '#EEF2FF',
+                            500: '#6366F1',
+                            600: '#4F46E5',
+                            700: '#4338CA'
+                        }
+                    }
+                }
+            }
+        };
+    </script>
+</head>
+<body class="bg-gray-50 font-sans">
+    <div class="min-h-screen flex">
+        <!-- Sidebar -->
+        <aside class="w-64 bg-white shadow-sm border-r border-gray-200 flex-shrink-0">
+            <div class="p-6 border-b border-gray-200">
+                <div class="flex items-center space-x-3">
+                    <div class="w-8 h-8 bg-primary-600 rounded-lg flex items-center justify-center">
+                        <i class="fas fa-video text-white text-sm"></i>
+                    </div>
+                    <h1 class="text-xl font-bold text-gray-900">ContentFlow</h1>
+                </div>
+            </div>
+            
+            <nav class="p-4 space-y-2">
+                <a href="/" class="flex items-center space-x-3 px-3 py-2 text-gray-700 hover:bg-gray-100 rounded-lg transition-colors {% if request.url.path == '/' %}text-primary-600 bg-primary-50 font-medium{% endif %}">
+                    <i class="fas fa-chart-line w-5"></i>
+                    <span>Dashboard</span>
+                </a>
+                <a href="/assets" class="flex items-center space-x-3 px-3 py-2 text-gray-700 hover:bg-gray-100 rounded-lg transition-colors {% if request.url.path == '/assets' %}text-primary-600 bg-primary-50 font-medium{% endif %}">
+                    <i class="fas fa-folder w-5"></i>
+                    <span>Assets</span>
+                </a>
+                <a href="/composer" class="flex items-center space-x-3 px-3 py-2 text-gray-700 hover:bg-gray-100 rounded-lg transition-colors {% if request.url.path == '/composer' %}text-primary-600 bg-primary-50 font-medium{% endif %}">
+                    <i class="fas fa-edit w-5"></i>
+                    <span>Composer</span>
+                </a>
+                <a href="/scheduler" class="flex items-center space-x-3 px-3 py-2 text-gray-700 hover:bg-gray-100 rounded-lg transition-colors {% if request.url.path == '/scheduler' %}text-primary-600 bg-primary-50 font-medium{% endif %}">
+                    <i class="fas fa-clock w-5"></i>
+                    <span>Scheduler</span>
+                </a>
+                <a href="/runs" class="flex items-center space-x-3 px-3 py-2 text-gray-700 hover:bg-gray-100 rounded-lg transition-colors {% if request.url.path == '/runs' %}text-primary-600 bg-primary-50 font-medium{% endif %}">
+                    <i class="fas fa-list w-5"></i>
+                    <span>Job Runs</span>
+                </a>
+                <a href="/reports" class="flex items-center space-x-3 px-3 py-2 text-gray-700 hover:bg-gray-100 rounded-lg transition-colors {% if request.url.path == '/reports' %}text-primary-600 bg-primary-50 font-medium{% endif %}">
+                    <i class="fas fa-chart-bar w-5"></i>
+                    <span>Reports</span>
+                </a>
+            </nav>
+            
+            <div class="absolute bottom-4 left-4 right-4">
+                <div class="bg-gray-100 rounded-lg p-3">
+                    <div class="flex items-center justify-between text-xs text-gray-600">
+                        <span>System Status</span>
+                        <span class="flex items-center space-x-1">
+                            <div class="w-2 h-2 bg-green-500 rounded-full"></div>
+                            <span>Online</span>
+                        </span>
+                    </div>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="flex-1 overflow-auto">
+            <!-- Header -->
+            <header class="bg-white border-b border-gray-200 px-6 py-4">
+                <div class="flex items-center justify-between">
+                    <div>
+                        <h2 class="text-2xl font-bold text-gray-900">{% block page_title %}{% endblock %}</h2>
+                        <p class="text-gray-600 mt-1">{% block page_description %}{% endblock %}</p>
+                    </div>
+                    <div class="flex items-center space-x-4">
+                        {% block header_actions %}{% endblock %}
+                    </div>
+                </div>
+            </header>
+
+            <!-- Page Content -->
+            <div class="p-6">
+                {% block content %}{% endblock %}
+            </div>
+        </main>
+    </div>
+
+    {% block scripts %}{% endblock %}
+</body>
+</html>

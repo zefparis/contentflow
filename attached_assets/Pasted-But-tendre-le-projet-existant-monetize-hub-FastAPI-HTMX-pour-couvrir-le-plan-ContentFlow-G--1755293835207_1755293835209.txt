@@ -1,0 +1,255 @@
+But: Étendre le projet existant monetize-hub (FastAPI + HTMX) pour couvrir le plan “ContentFlow”. Génère/édite les fichiers listés ci-dessous avec code concret minimal (pas de TODO) afin que ça boot et passe les critères d’acceptance.
+
+0) Déps & ENV (append)
+
+requirements.txt (ajouter) :
+
+opencv-python-headless==4.10.0.84
+imagehash==4.3.1
+pillow==10.4.0
+scikit-learn==1.5.1
+
+
+.env.example (ajouter clés placeholders) :
+
+# Instagram Graph API (Reels) — Business/Creator requis
+IG_APP_ID=
+IG_APP_SECRET=
+IG_REDIRECT_URL=https://<repl>.repl.co/oauth/instagram/callback
+IG_PAGE_ID=
+IG_IG_USER_ID=
+# TikTok Content Posting API — si indispo, restera en stub
+TIKTOK_CLIENT_KEY=
+TIKTOK_CLIENT_SECRET=
+TIKTOK_REDIRECT_URL=https://<repl>.repl.co/oauth/tiktok/callback
+
+1) DB — nouveaux modèles & champs
+
+Éditer app/models.py pour ajouter (ou migrer si déjà existant) :
+
+Experiment (A/B) : id, post_id, variant, arm_key, status, metrics_json, created_at
+
+MetricEvent : id, post_id, platform, kind[view|click|conversion|revenue], value, meta_json, ts
+
+Rule (compliance/planning) : id, key, value_json, enabled
+
+Job (queue légère) : id, kind[ingest|transform|publish], payload_json, status[queued|running|done|failed], attempts, last_error, created_at, updated_at
+
+Sur Asset : ajouter phash (str, nullable), keywords (str), index
+
+Sur Post : ajouter language (str), hashtags (str), ab_group (str), index
+
+Créer infra/migrations.sql append pour ces tables si Postgres est utilisé.
+
+2) Ingestion avancée
+
+services/sources.py :
+
+Ajouter filtrage par mots-clés/catégories (regex case-insensitive sur titre/desc).
+
+Dédup : calculer un pHash sur thumbnail (télécharge la miniature si dispo) via imagehash + Pillow; si HammingDistance <= 5, considérer comme doublon → ignorer.
+
+Surveillance continue : exposer ingest_watch() qui scanne chaque source active, limite N/run.
+
+routes/sources.py :
+
+Form pour configurer keywords (CSV) / categories / min_duration / lang par Source.
+
+Seed : ajouter 2 sources (TechCrunch RSS, The Verge RSS) et 1 playlist YouTube CC (si pas de key → mocker 2 assets).
+
+3) Transform vidéo (Assets++)
+
+utils/ffmpeg.py :
+
+Fonction make_vertical(input, plan, out_path) :
+
+scale/pad 1080x1920, 30fps, bitrate adaptatif.
+
+Auto-cut : si plan.segments absent → générer clip 8–20s au milieu (fallback).
+
+Sous-titres : si plan.srt fourni → overlay via subtitles; sinon ignorer.
+
+Overlays : drawtext pour HOOK (0–5s), watermark attribution en bas-droite, CTA (20–28s).
+
+Preset qualité : preset=veryfast, -movflags +faststart.
+
+services/assets.py :
+
+analyze_asset() : extraire durée, lang probable (regex titre/desc), keywords.
+
+transform_asset(asset) : appelle AI planner (ci-dessous), puis make_vertical, upload S3 si configuré, set status=ready.
+
+templates/assets.html :
+
+Afficher keywords, phash, duration, boutons “Transform”, “Preview”.
+
+4) AI Planner + A/B + Bandit
+
+services/ai_planner.py :
+
+generate_plan_heuristic(asset) :
+
+segments: ≤30s, HOOK ≤5s, CTA à t=20–28s
+
+overlays: hook_text, cta_text, attribution
+
+hashtags: 3–6 tags (mots-clés top du titre)
+
+language: hérité de l’asset (fallback fr)
+
+quality_score (0..1) simple : +0.1 si durée dans [10,30], +0.1 si mots-clés présents, cap à 0.9
+
+choose_variants_for_ab(post) :
+
+Générer 2 titres & 2 descriptions (règles basiques : version “curiosité” vs “valeur”)
+
+Créer 2 Experiment (A/B) avec arm_key = title:v1/v2
+
+utils/bandit.py :
+
+Thompson sampling stocké dans Rule (ou JSON en DB) par arm {platform, language, hook_id}; reward = clic (binaire) agrégé par MetricEvent(kind="click").
+
+choose_arm(context) → clé d’arm, fallback round-robin.
+
+5) Compliance (gate)
+
+services/compliance.py :
+
+compute_risk(asset, plan) → score 0..1 :
+
++0.5 si licence inconnue/non CC-BY/non stock
+
++0.2 si langage détecté “sensible” (mots taboo simple list)
+
++0.1 si pas d’attribution en overlay
+
+Bloque autopost si risk>=0.2 ou plan.quality_score<0.7 → file Review.
+
+templates/dashboard.html :
+
+Card “Gate”: nb en Review, nb auto-postables.
+
+6) Publishers — ajout Instagram/TikTok (stubs propres)
+
+services/publish.py :
+
+Ajouter publish_instagram(post, file_path) :
+
+Si tokens absents → raise RuntimeError("Instagram non connecté").
+
+Sinon : stub qui log “upload reel via Graph API” (pas d’appel réel sans creds).
+
+Ajouter publish_tiktok(post, file_path) :
+
+Si tokens absents → raise RuntimeError("TikTok non connecté").
+
+Sinon : stub “upload via Content Posting API” (doc: chunk upload + publish).
+
+Router do_publish() : gérer "instagram" et "tiktok" → stubs, et backoff si échec (Job.attempts++).
+
+routes/ui.py :
+
+Page /accounts : ajouter boutons “Connecter Instagram” / “Connecter TikTok” (mène aux routes OAuth si implémentées plus tard, sinon affiche “coming soon”).
+
+7) Scheduler + Autopilot
+
+services/scheduler.py :
+
+Jobs :
+
+job_ingest() : watch sources + filtre + dédup (pHash)
+
+job_transform() : analyze_asset → AI plan → transform_asset
+
+job_publish() : si risk < 0.2 && quality>=0.7 → publier; sinon Review
+
+job_metrics() : placeholder (ingest CSV/API plus tard)
+
+Priorisation : traiter d’abord Assets récents et non dupliqués; limiter concurrence à 2.
+
+workers/autopilot.py :
+
+autopilot_tick() :
+
+pull N nouveaux Assets
+
+score compliance & quality
+
+transform → ready
+
+A/B variantes (si Post.platform in ["youtube","reddit","pinterest"])
+
+bandit → choisir plateforme/lang/hook
+
+queue publish
+
+8) Analytics & Revenus
+
+utils/metrics.py :
+
+estimate_daily_revenue(views, ctr, epc) = views * (ctr/100) * epc
+
+helpers pour agréger MetricEvent par jour/plateforme.
+
+routes/reports.py :
+
+/reports : simulateur (vues/ctr/epc ⇒ €), tableau “7 derniers jours” à partir de MetricEvent.
+
+Export CSV : /reports/export.csv
+
+Tracking :
+
+Sur Post.shortlink → stocker {post_id, platform} et générer URL avec UTM depuis .env (si présent).
+
+Ajouter endpoint /l/{hash} (redirige vers affiliate_url + utm, et crée MetricEvent(kind="click")).
+
+9) UI
+
+templates :
+
+dashboard.html : métriques clés (assets new/ready, posts queued/posted, review count), bouton “Autopilot ON/OFF” (flag bool en mem ou Rule).
+
+assets.html : colonnes keywords, phash, risk, quality, action “Preview MP4”.
+
+composer.html : sélecteur plateforme (youtube|reddit|pinterest|instagram|tiktok), langue, hashtags; bouton “Créer A/B”.
+
+runs.html : afficher Job + Run (logs compacts).
+
+reports.html : simulateur € + table KPI jour/plateforme.
+
+10) Acceptance (doit passer)
+
+/ s’ouvre, pas d’erreur.
+
+/jobs/ingest crée ≥1 Asset.new avec keywords remplis.
+
+Ingestion ignore un doublon via pHash.
+
+/jobs/transform → génère MP4 vertical 1080x1920 de démo, Asset.ready=1.
+
+Composer un Post avec A/B → crée 2 Experiments.
+
+/jobs/publish :
+
+YouTube/Reddit/Pinterest → passe par impl existante (ou stub si non connectés) et Post.status=posted / failed loggé.
+
+Instagram/TikTok → stubs qui lèvent “non connecté” si pas de creds.
+
+/l/{hash} redirige et inscrit un MetricEvent(kind="click").
+
+/reports calcule € = views * (ctr/100) * epc et export CSV OK.
+
+Autopilot tourne (APScheduler) sans crasher; throttle ≤2 jobs simultanés; gate compliance respecté.
+
+11) Notes ToS/limites (à afficher dans README)
+
+Instagram Reels via Graph API : nécessite compte Business/Creator + app Facebook approuvée.
+
+TikTok Posting API : accès développeur approuvé; sinon rester en stub.
+
+Toujours afficher attribution + #ad si lien affilié.
+
+Pas de re-upload de contenu non licencié; CC-BY/stock only.
+
+Génère/édite maintenant le code correspondant pour tous les points ci-dessus (fichiers, routes, services, templates).
+Objectif : boot immédiat sur Replit, avec pipeline Ingest → Transform → A/B → (Stub) Publish → Tracking → Reports opérationnel.

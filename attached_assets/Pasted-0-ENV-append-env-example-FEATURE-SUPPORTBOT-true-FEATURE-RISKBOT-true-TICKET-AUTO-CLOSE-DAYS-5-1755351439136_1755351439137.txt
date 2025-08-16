@@ -1,0 +1,256 @@
+0) ENV (append)
+
+.env.example
+
+FEATURE_SUPPORTBOT=true
+FEATURE_RISKBOT=true
+TICKET_AUTO_CLOSE_DAYS=5
+RISK_VELOCITY_MAX_CLICKS_10M=40
+RISK_HOLD_DAYS=30
+PAYOUT_APPROVAL_THRESHOLD_EUR=200
+ADMIN_SECRET=change_me
+
+
+app/config.py (append dans Settings)
+
+FEATURE_SUPPORTBOT: bool = True
+FEATURE_RISKBOT: bool = True
+TICKET_AUTO_CLOSE_DAYS: int = 5
+RISK_VELOCITY_MAX_CLICKS_10M: int = 40
+RISK_HOLD_DAYS: int = 30
+PAYOUT_APPROVAL_THRESHOLD_EUR: float = 200.0
+ADMIN_SECRET: str = "change_me"
+
+1) DB (append)
+
+infra/migrations.sql
+
+CREATE TABLE IF NOT EXISTS tickets(
+  id TEXT PRIMARY KEY, partner_id TEXT, kind TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'open', priority TEXT NOT NULL DEFAULT 'P3',
+  subject TEXT, last_bot_reply TEXT, created_at TIMESTAMPTZ DEFAULT now(),
+  updated_at TIMESTAMPTZ DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS ticket_messages(
+  id TEXT PRIMARY KEY, ticket_id TEXT NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
+  author TEXT NOT NULL, body TEXT NOT NULL, created_at TIMESTAMPTZ DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS partner_flags(
+  id TEXT PRIMARY KEY, partner_id TEXT NOT NULL REFERENCES partners(id) ON DELETE CASCADE,
+  flag TEXT NOT NULL, value_json TEXT NOT NULL DEFAULT '{}', created_at TIMESTAMPTZ DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_flags_pid ON partner_flags(partner_id);
+
+
+app/models.py (append)
+
+class Ticket(Base):
+    __tablename__ = "tickets"
+    id = sa.Column(sa.String, primary_key=True, default=lambda: str(uuid4()))
+    partner_id = sa.Column(sa.String, nullable=True)
+    kind = sa.Column(sa.String, nullable=False)
+    status = sa.Column(sa.String, nullable=False, default="open")
+    priority = sa.Column(sa.String, nullable=False, default="P3")
+    subject = sa.Column(sa.String, nullable=True)
+    last_bot_reply = sa.Column(sa.Text, nullable=True)
+    created_at = sa.Column(sa.DateTime(timezone=True), server_default=sa.func.now())
+    updated_at = sa.Column(sa.DateTime(timezone=True), server_default=sa.func.now(), onupdate=sa.func.now())
+
+class TicketMessage(Base):
+    __tablename__ = "ticket_messages"
+    id = sa.Column(sa.String, primary_key=True, default=lambda: str(uuid4()))
+    ticket_id = sa.Column(sa.String, sa.ForeignKey("tickets.id", ondelete="CASCADE"))
+    author = sa.Column(sa.String, nullable=False)  # user|bot|admin
+    body = sa.Column(sa.Text, nullable=False)
+    created_at = sa.Column(sa.DateTime(timezone=True), server_default=sa.func.now())
+
+class PartnerFlag(Base):
+    __tablename__ = "partner_flags"
+    id = sa.Column(sa.String, primary_key=True, default=lambda: str(uuid4()))
+    partner_id = sa.Column(sa.String, sa.ForeignKey("partners.id", ondelete="CASCADE"), index=True)
+    flag = sa.Column(sa.String, nullable=False)  # hold|fraud|dmca
+    value_json = sa.Column(sa.Text, nullable=False, default="{}")
+    created_at = sa.Column(sa.DateTime(timezone=True), server_default=sa.func.now())
+
+2) Services (new)
+
+app/services/supportbot.py
+
+import re, datetime as dt
+from uuid import uuid4
+from app.db import SessionLocal
+from app.config import settings
+from app.models import Ticket, TicketMessage
+from app.services.ledger import partner_balances
+
+FAQ = [
+  (re.compile(r"payout|paiement|versement", re.I), "Paiements: seuil {min}€, hebdo. Disponible: {available}€. Réserve: {reserved}€ (libérée sous {days}j)."),
+  (re.compile(r"magic|login|lien", re.I), "Login: /partner/magic avec ton email."),
+  (re.compile(r"dmca|copyright", re.I), "DMCA: on met en quarantaine et on traite sous 72h."),
+]
+
+def _auto_reply(pid:str|None, body:str)->str:
+  bal = partner_balances(pid) if pid else {"available":0,"reserved":0}
+  for rx,msg in FAQ:
+    if rx.search(body or ""):
+      return msg.format(min=int(settings.PAYOUT_MIN_EUR), available=bal["available"], reserved=bal["reserved"], days=int(getattr(settings,"PAYOUT_RELEASE_DAYS",30)))
+  return "Reçu. Le bot a routé ta demande. Réponse humaine si nécessaire <24h. Stats: /partners/earnings."
+
+def create_ticket(pid:str|None, subject:str, body:str, kind:str="faq") -> str:
+  db = SessionLocal()
+  t = Ticket(id=str(uuid4()), partner_id=pid, kind=kind, subject=subject or (body or "")[:60], status="open")
+  db.add(t); db.commit()
+  db.add(TicketMessage(id=str(uuid4()), ticket_id=t.id, author="user", body=body or ""))
+  bot = _auto_reply(pid, body or "")
+  db.add(TicketMessage(id=str(uuid4()), ticket_id=t.id, author="bot", body=bot))
+  t.last_bot_reply, t.status = bot, "bot_answered"; db.commit()
+  return t.id
+
+def auto_close_stale():
+  db = SessionLocal()
+  cutoff = dt.datetime.utcnow() - dt.timedelta(days=settings.TICKET_AUTO_CLOSE_DAYS)
+  for t in db.query(Ticket).filter(Ticket.status.in_(("bot_answered","awaiting_user")), Ticket.updated_at<cutoff).all():
+    t.status="closed"
+  db.commit()
+
+
+app/services/riskbot.py
+
+import datetime as dt
+from sqlalchemy import func
+from uuid import uuid4
+from app.db import SessionLocal
+from app.models import MetricEvent, PartnerFlag
+
+def sweep_click_velocity(max10:int):
+  db = SessionLocal()
+  since = dt.datetime.utcnow() - dt.timedelta(minutes=10)
+  rows = db.query(MetricEvent.partner_id, func.count().label("n"))\
+    .filter(MetricEvent.kind=="click", MetricEvent.ts>=since, MetricEvent.partner_id.isnot(None))\
+    .group_by(MetricEvent.partner_id).having(func.count() >= max10).all()
+  flagged=0
+  for pid, _ in rows:
+    if not db.query(PartnerFlag).filter_by(partner_id=pid, flag="hold").first():
+      db.add(PartnerFlag(id=str(uuid4()), partner_id=pid, flag="hold", value_json='{"reason":"velocity"}')); flagged+=1
+  db.commit(); return flagged
+
+def is_on_hold(db, pid:str)->bool:
+  return db.query(PartnerFlag).filter_by(partner_id=pid, flag="hold").first() is not None
+
+3) Routes (new)
+
+app/routes/support_ui.py
+
+from fastapi import APIRouter, Request, Form
+from fastapi.responses import HTMLResponse, RedirectResponse
+from app.services.supportbot import create_ticket
+
+router = APIRouter(prefix="/support", tags=["support"])
+def _pid(req:Request): return req.cookies.get("partner_id")
+
+@router.get("/new")
+def support_new():
+  return HTMLResponse("""<section style='max-width:720px;margin:40px auto;font-family:system-ui'>
+  <h2>Support</h2><form method="post" action="/support/new">
+  <input name="subject" placeholder="Sujet" style="width:100%;padding:8px;border:1px solid #ccc"><br><br>
+  <textarea name="body" placeholder="Décris ton souci" style="width:100%;height:120px;padding:8px;border:1px solid #ccc"></textarea><br><br>
+  <button style="padding:8px 12px">Envoyer</button></form></section>""")
+
+@router.post("/new")
+def support_create(request: Request, subject:str=Form(""), body:str=Form("")):
+  tid = create_ticket(_pid(request), subject, body)
+  return RedirectResponse(f"/support/thanks?id={tid}", status_code=303)
+
+@router.get("/thanks")
+def support_thanks(id:str):
+  return HTMLResponse(f"<section style='max-width:720px;margin:40px auto;font-family:system-ui'><h3>Reçu ✅</h3><p>Ticket #{id} créé. Une réponse a été envoyée.</p></section>")
+
+
+app/routes/admin_ops.py
+
+from fastapi import APIRouter, Request, Query
+from fastapi.responses import HTMLResponse, RedirectResponse
+from app.config import settings
+from app.db import SessionLocal
+from app.models import Payout, PartnerFlag
+
+router = APIRouter(prefix="/ops", tags=["ops"])
+def _guard(req:Request): return req.headers.get("x-admin-secret")==settings.ADMIN_SECRET
+
+@router.get("/holds")
+def holds(request: Request):
+  if not _guard(request): return HTMLResponse("Unauthorized", status_code=401)
+  db = SessionLocal(); hs = db.query(PartnerFlag).filter_by(flag="hold").all()
+  html="<h2>Holds</h2><ul>"+ "".join([f"<li>{h.partner_id} — {h.value_json} — <a href='/ops/unhold?pid={h.partner_id}'>Unhold</a></li>" for h in hs]) + "</ul>"
+  return HTMLResponse(html)
+
+@router.get("/unhold")
+def unhold(request: Request, pid:str=Query(...)):
+  if not _guard(request): return HTMLResponse("Unauthorized", status_code=401)
+  db = SessionLocal(); db.query(PartnerFlag).filter_by(partner_id=pid, flag="hold").delete(); db.commit()
+  return RedirectResponse("/ops/holds", status_code=303)
+
+@router.get("/payouts/pending")
+def payouts_pending(request: Request):
+  if not _guard(request): return HTMLResponse("Unauthorized", status_code=401)
+  db = SessionLocal()
+  ps = db.query(Payout).filter(Payout.status=="approved", Payout.amount_due_eur>=settings.PAYOUT_APPROVAL_THRESHOLD_EUR).all()
+  html="<h2>Payouts à valider</h2><ul>"+ "".join([f"<li>{p.partner_id} — {p.amount_due_eur:.2f}€ — <a href='/admin/pay?id={p.id}'>Mark paid</a></li>" for p in ps]) + "</ul>"
+  return HTMLResponse(html)
+
+
+Montage routes – app/main.py (append)
+
+from app.routes import support_ui as support_ui_routes
+from app.routes import admin_ops as admin_ops_routes
+app.include_router(support_ui_routes.router)
+app.include_router(admin_ops_routes.router)
+
+4) Scheduler (append)
+
+app/services/scheduler.py (append seulement les jobs; ne pas dupliquer setup_jobs)
+
+from apscheduler.triggers.interval import IntervalTrigger
+from app.services.supportbot import auto_close_stale
+from app.services.riskbot import sweep_click_velocity
+
+def job_support_autoclose(): auto_close_stale()
+def job_risk_sweep(): sweep_click_velocity(settings.RISK_VELOCITY_MAX_CLICKS_10M)
+
+def setup_jobs(sched):
+    # ... existent ...
+    sched.add_job(job_support_autoclose, IntervalTrigger(hours=6))
+    sched.add_job(job_risk_sweep, IntervalTrigger(minutes=10))
+
+5) Guard publication (1 check, append dans ta boucle publish)
+
+Exemple app/services/publish.py (snippet)
+
+from app.services.riskbot import is_on_hold
+from app.db import SessionLocal
+def _blocked(pid:str)->bool:
+    db = SessionLocal(); return is_on_hold(db, pid)
+
+# avant de publier un assignment:
+if assignment.partner_id and _blocked(assignment.partner_id):
+    # skip soft (log) et passe au suivant
+    continue
+
+6) UI (2 liens, append)
+
+Dans ton menu/portal partenaires, ajoute:
+
+<a href="/support/new">Support</a>
+
+
+Pour les admins, visite directement /ops/holds et /ops/payouts/pending avec header x-admin-secret.
+
+7) Smoke tests (2 min)
+
+/support/new → submit → redirige vers /support/thanks ; DB: tickets + ticket_messages (bot replied).
+
+Génère 50 faux clics/10 min sur 1 partner → hold présent → publication sautée (guard OK).
+
+/ops/holds (avec header secret) → voir & unhold.
+
+/ops/payouts/pending (header secret) → liste des payouts ≥ seuil; “Mark paid” fonctionne via route admin existante.

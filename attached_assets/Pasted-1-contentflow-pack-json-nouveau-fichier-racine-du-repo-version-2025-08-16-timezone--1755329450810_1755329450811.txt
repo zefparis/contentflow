@@ -1,0 +1,170 @@
+1) contentflow_pack.json (nouveau fichier, racine du repo)
+{
+  "version": "2025-08-16",
+  "timezone": "Europe/Paris",
+  "planner_policies": {
+    "shorts_max_s": 30,
+    "hook_max_s": 5,
+    "cta_window_s": [20, 28],
+    "lang_primary": ["fr","en"],
+    "title_max_chars": 70,
+    "desc_max_chars": 4500
+  },
+  "ffmpeg_recipes": {
+    "shorts_9_16": {
+      "scale": "1080x1920",
+      "fps": 30,
+      "vcodec": "libx264",
+      "preset": "veryfast",
+      "movflags": "+faststart",
+      "filters": [
+        "scale=1080:1920:force_original_aspect_ratio=decrease",
+        "pad=1080:1920:(ow-iw)/2:(oh-ih)/2"
+      ],
+      "overlays": {
+        "hook": "drawtext=text='{HOOK}':x=(w-tw)/2:y=h*0.08:box=1:boxcolor=black@0.5:boxborderw=16:fontsize=48:fontcolor=white",
+        "cta": "drawtext=text='{CTA}':x=(w-tw)/2:y=h*0.84:box=1:boxcolor=black@0.5:boxborderw=16:fontsize=42:fontcolor=white",
+        "wm": "drawtext=text='{ATTRIB}':x=w-tw-24:y=h-th-24:fontsize=26:fontcolor=white@0.7"
+      }
+    }
+  },
+  "scheduler_windows": {
+    "youtube": ["08:30-10:00","12:00-14:00","18:00-22:30"],
+    "tiktok":  ["09:00-11:00","13:00-15:00","19:00-23:00"],
+    "pinterest":["07:00-09:00","11:30-13:30","20:00-22:00"],
+    "reddit":   ["08:00-12:00","18:00-22:00"]
+  },
+  "bandit_arms": [
+    {"platform":"youtube","lang":"fr","hook_id":"pain"},
+    {"platform":"youtube","lang":"en","hook_id":"gain"},
+    {"platform":"tiktok","lang":"fr","hook_id":"pattern"},
+    {"platform":"pinterest","lang":"fr","hook_id":"howto"},
+    {"platform":"reddit","lang":"fr","hook_id":"fact"}
+  ],
+  "denylist_keywords": ["casino", "crypto scam", "pharma", "nsfw", "get rich quick", "airdrop", "torrent illégal"],
+  "niches": {
+    "vpn": {
+      "hashtags": ["#VPN","#Sécurité","#Confidentialité","#Streaming","#Netflix","#WiFiPublic","#Promo","#Cyber","#Astuce","#2025","#ViePrivée","#Anonyme"],
+      "ctas": ["Protège ta connexion ↓","Teste le VPN à 2€ ↓","#ad Offre du jour ↓","Stop fuites DNS ↓","Débloque Netflix US ↓","-70% ce mois-ci ↓"],
+      "serpapi_queries": {
+        "youtube_queries": ["VPN pas cher 2025","VPN Netflix fonctionne","meilleur VPN France","VPN vs Proxy","WireGuard expliqué","VPN Android iPhone","Split tunneling tuto"],
+        "news_queries": ["VPN sécurité vie privée","loi surveillance internet France","censure streaming VPN"],
+        "trends_category_id": 5
+      },
+      "hooks": [
+        "Tu laisses tes données en clair ?",
+        "Ton Wi-Fi public te vend déjà...",
+        "5€ perdus par mois à cause de ça",
+        "Tu crois que ton mode privé suffit ?",
+        "Arrête de te faire géolocaliser",
+        "Netflix bloqué ? Solution en 30s",
+        "Ton IP raconte toute ta vie",
+        "3 réglages VPN que personne n’utilise",
+        "WireGuard en 1 minute (promis)",
+        "Erreur N°1 avec les VPN mobiles",
+        "Le test qui trahit ton vrai pays",
+        "Stopper les pubs réseau à la source"
+      ],
+      "titles": [
+        "VPN pas cher 2025 : le seul qui débloque Netflix 🇺🇸",
+        "WireGuard vs OpenVPN : lequel choisir en 2025 ?",
+        "Réglages VPN indispensables (éviter les fuites DNS)",
+        "Wi-Fi public : se protéger en 30 secondes (vrai guide)",
+        "Split Tunneling : accélérer Netflix sans tout chiffrer",
+        "VPN pour smartphone : le piège à éviter",
+        "Stop tracking pub : 3 étapes avec un VPN",
+        "VPN & ping : gaming sans perte (réglages)",
+        "Voyage à l’étranger : débloquer ses apps légalement",
+        "Comparatif VPN France : prix, vitesse, logs",
+        "VPN gratuit vs payant : la vérité 2025",
+        "Pourquoi ton VPN ‘connecté’ ne protège pas",
+        "Kill Switch : à activer absolument",
+        "Multi-hop & double VPN : utile ou gadget ?",
+        "Comment tester les fuites (IP/DNS/WebRTC)",
+        "VPN & torrents : ce qui est légal",
+        "Contourner la censure sans se faire bannir",
+        "Installer un VPN sur routeur en 5 minutes"
+      ]
+    },
+    "hosting": {
+      "hashtags": ["#Hébergement","#Web","#Dev","#Serveur","#Performance","#SEO","#WordPress","#Cloud","#Docker","#NVMe","#TLS","#Monitoring"],
+      "ctas": ["Lance ton site à 2€ ↓","Hébergement NVMe -70% ↓","#ad Crédit gratuit ↓","Migrer sans downtime ↓","Boost Core Web Vitals ↓","Backup auto en 1 clic ↓"],
+      "serpapi_queries": {
+        "youtube_queries": ["hébergement web pas cher 2025","VPS NVMe benchmark","Plesk vs cPanel 2025","WordPress performance guide","reverse proxy Nginx tuto","Let's Encrypt wildcard","HTTP/3 QUIC tuto"],
+        "news_queries": ["hébergement NVMe promo","Google Core Web Vitals hébergement","panne datacenter Europe"],
+        "trends_category_id": 18
+      },
+      "hooks": [
+        "Ton site rame ? Ce n’est pas ton code",
+        "Tu payes trop pour du SATA",
+        "Core Web Vitals rouge = adieu SEO",
+        "NVMe à 3€ ? Oui, mais lis ça",
+        "Le réglage PHP qui double ta vitesse",
+        "HTTP/3 activé ? 30s pour vérifier",
+        "Cache mal réglé = argent brûlé",
+        "Migrer sans downtime : la checklist",
+        "Ton hébergeur te throttle sans le dire",
+        "Image CDN : 50% de bande passante en moins",
+        "Monitoring à 0€ : alerte en 60s",
+        "SSL wildcard gratuit : voilà comment"
+      ],
+      "titles": [
+        "Hébergement NVMe pas cher : le bon plan 2025",
+        "Booster Core Web Vitals en 10 min (sans dev)",
+        "HTTP/3 (QUIC) : activer et tester correctement",
+        "Plesk vs cPanel : lequel en 2025 ?",
+        "Nginx reverse proxy : setup prêt-prod",
+        "CDN images : -50% bande passante, +SEO",
+        "Cache serveur : règles simples qui changent tout",
+        "Migration 0 downtime : méthode pas à pas",
+        "Monitoring gratuit : uptime + alertes Slack",
+        "Backups chiffrés automatiques (cron prêt)",
+        "WordPress rapide : 5 réglages serveurs clés",
+        "VPS low-cost : éviter ces 3 pièges",
+        "TLS moderne : ciphers & security headers",
+        "Scalabilité simple : 1 VPS → 3 services",
+        "Logs & métriques : quoi garder, combien de temps",
+        "Email délivrabilité : SPF, DKIM, DMARC en 5 min",
+        "Pare-feu applicatif léger (fail2ban + rate limit)",
+        "Bench NVMe vs SATA : chiffres réels"
+      ]
+    },
+    "ai_saas": {
+      "hashtags": ["#IA","#SaaS","#Automation","#NoCode","#Productivité","#Agent","#LLM","#Prompts","#Growth","#Builder","#API","#DevTools"],
+      "ctas": ["Teste l’IA (gratuit) ↓","#ad -50% 1er mois ↓","Automatise en 24h ↓","Essai 7 jours ↓","Workflow prêt à l’emploi ↓","Génère 10 posts/j ↓"],
+      "serpapi_queries": {
+        "youtube_queries": ["agent IA business 2025","automatisation nocode IA","prompt engineering français","LLM API pricing 2025","Make.com GPT use cases","Zapier AI actions","cold email IA legal"],
+        "news_queries": ["IA productivité étude 2025","LLM coût inference baisse","agents autonomes en prod"],
+        "trends_category_id": 31
+      },
+      "hooks": [
+        "Tu fais encore ça à la main ?",
+        "1 heure par jour reprise immédiatement",
+        "Ton client veut du 24/7 ?",
+        "Ce workflow te remplace 3 outils",
+        "Tu payes l’IA trop cher",
+        "Le prompt que personne ne partage",
+        "Agent ≠ Chatbot : la nuance qui paie",
+        "Crée 10 posts/j sans souffrir",
+        "Tes leads dorment la nuit",
+        "Brancher l’IA sur ton CRM en 5 min",
+        "Zéro ligne de code, vrai impact",
+        "Facture plus, travaille moins"
+      ],
+      "titles": [
+        "Agent IA prêt-prod : pipeline complet en 24h",
+        "Automatiser 80% d’un business avec 3 outils",
+        "Prompts FR qui convertissent (pack pratique)",
+        "Réduire -60% le coût LLM (astuces pricing)",
+        "Make.com + IA : 5 use cases réels",
+        "Cold email légal avec IA : comment faire",
+        "Générer 10 posts/j (sans spammer)",
+        "Brancher l’IA à ton CRM (FastAPI + webhooks)",
+        "Table de prompts pour vender + rapide",
+        "Migration GPT → provider mix (failover)",
+        "RAG local ≠ vector store poubelle : les règles",
+        "Mesurer le ROI de l’IA (vraiment)"
+      ]
+    }
+  }
+}

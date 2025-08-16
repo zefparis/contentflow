@@ -1,0 +1,166 @@
+Objectif : implémenter un moteur de pricing cpc_dynamic (par défaut), exposer une API interne et afficher l’offre à jour sur /partners + barème sur /partners/earnings.
+
+0) ENV (append-only)
+
+.env.example – ajoute ces lignes :
+
+DEFAULT_EPC_EUR=0.25
+OFFER_MODE=cpc_dynamic         # cpc_fixed | cpc_dynamic | revshare | hybrid
+CPC_DEFAULT_EUR=0.10
+CPC_MIN_EUR=0.06
+CPC_MAX_EUR=0.12
+REVSHARE_BASE_PCT=0.40         # 40% du revenu
+CPC_SAFETY_MARGIN_EUR=0.05     # buffer marge & risques
+
+1) Config (append-only)
+
+app/config.py – append dans la classe Settings :
+
+class Settings(BaseSettings):
+    # ...
+    DEFAULT_EPC_EUR: float = 0.25
+    OFFER_MODE: str = "cpc_dynamic"
+    CPC_DEFAULT_EUR: float = 0.10
+    CPC_MIN_EUR: float = 0.06
+    CPC_MAX_EUR: float = 0.12
+    REVSHARE_BASE_PCT: float = 0.40
+    CPC_SAFETY_MARGIN_EUR: float = 0.05
+
+2) Pricing engine (nouveau fichier)
+
+app/services/pricing.py
+
+import datetime as dt
+from sqlalchemy import func
+from app.db import SessionLocal
+from app.config import settings
+from app.models import MetricEvent
+
+def _since(days:int): 
+    return dt.datetime.utcnow() - dt.timedelta(days=7 if days<=0 else days)
+
+def epc_7d(platform:str|None=None, niche:str|None=None) -> float:
+    """EPC observé (€/clic) sur 7j; fallback DEFAULT_EPC_EUR si pas de data."""
+    db = SessionLocal(); since = _since(7)
+    q = db.query(
+        func.coalesce(func.sum(MetricEvent.amount_eur), 0.0),
+        func.coalesce(func.count(), 0)
+    ).filter(MetricEvent.kind=="click", MetricEvent.ts>=since)
+    if platform:
+        q = q.filter(MetricEvent.platform==platform)
+    total, n = q.first()
+    if not n:
+        return float(settings.DEFAULT_EPC_EUR)
+    return float(total) / float(n)
+
+def compute_cpc(epc: float) -> float:
+    """CPC partenaire = clamp( epc * REVSHARE - buffer, [floor, ceiling] )."""
+    base = epc * float(settings.REVSHARE_BASE_PCT)
+    cpc = base - float(settings.CPC_SAFETY_MARGIN_EUR)
+    cpc = max(float(settings.CPC_MIN_EUR), min(float(settings.CPC_MAX_EUR), cpc))
+    # si data trop faible, fallback
+    if cpc < settings.CPC_MIN_EUR + 0.001 and epc <= 0.15:
+        cpc = float(settings.CPC_DEFAULT_EUR)
+    return round(cpc, 2)
+
+def current_offer() -> dict:
+    mode = (settings.OFFER_MODE or "cpc_dynamic").lower()
+    epc = epc_7d()
+    if mode == "cpc_fixed":
+        cpc = round(float(settings.CPC_DEFAULT_EUR), 2)
+        return {"headline_cpc": cpc, "epc_7d": round(epc,2), "terms": {"mode": mode, "cpc": cpc}}
+    if mode == "revshare":
+        pct = float(settings.REVSHARE_BASE_PCT)
+        return {"headline_cpc": round(epc * pct, 2), "epc_7d": round(epc,2), "terms": {"mode": mode, "revshare_pct": pct}}
+    if mode == "hybrid":
+        pct = float(settings.REVSHARE_BASE_PCT)
+        fixed = float(settings.CPC_MIN_EUR)
+        headline = round(max(fixed, epc * pct - settings.CPC_SAFETY_MARGIN_EUR), 2)
+        return {"headline_cpc": headline, "epc_7d": round(epc,2), "terms": {"mode": mode, "fixed": fixed, "revshare_pct": pct}}
+    # cpc_dynamic
+    cpc = compute_cpc(epc)
+    return {"headline_cpc": float(cpc), "epc_7d": round(epc,2), "terms": {"mode": "cpc_dynamic", "cpc": cpc}}
+
+3) Landing /partners → badge dynamique
+
+Remplacement contrôlé de la fonction (le reste du fichier ne bouge pas).
+
+app/routes/partners_ui.py – remplace uniquement la fonction partners_landing() par ceci (si le fichier n’existe pas, crée-le et ajoute la route) :
+
+from fastapi import APIRouter, Query
+from fastapi.responses import HTMLResponse
+from app.config import settings
+from app.services.pricing import current_offer
+
+router = APIRouter(tags=["partners_ui"])  # s'il est déjà déclaré, ne duplique pas
+
+@router.get("/partners")
+def partners_landing():
+    offer = current_offer()
+    mode = offer["terms"]["mode"]
+    is_rev = (mode == "revshare")
+    badge = f"jusqu’à €{offer['headline_cpc']:.2f} par clic" if not is_rev else f"jusqu’à €{offer['headline_cpc']:.2f} indicatif"
+    html = f"""
+    <section style="max-width:960px;margin:40px auto;font-family:system-ui">
+      <h1>Programme Partenaires</h1>
+      <p>Monétisez votre audience avec du contenu automatisé par IA. Gagnez des revenus sans créer de contenu.</p>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;margin:14px 0;">
+        <span style="background:#E8F7EE;color:#0A7A3F;padding:8px 12px;border-radius:999px;">$ {badge}</span>
+        <span style="background:#E7F0FF;color:#2B5BFF;padding:8px 12px;border-radius:999px;">↗ Paiements automatiques</span>
+        <span style="background:#F5E8FF;color:#7B2FFF;padding:8px 12px;border-radius:999px;">🎮 Leaderboard gamifié</span>
+      </div>
+      <form method="post" action="/partner/magic" style="margin:16px 0">
+        <h3>Rejoindre le programme</h3>
+        <input name="email" placeholder="votre@email.com" style="padding:8px;border:1px solid #ccc;width:320px">
+        <button style="padding:8px 12px">Obtenir un lien d'accès →</button>
+      </form>
+      <small style="opacity:.7;">Mode: {mode}. EPC7j={offer['epc_7d']:.2f}€.</small>
+      <p><a href="/partners/leaderboard">Voir le leaderboard</a> · <a href="/partners/faq">FAQ</a></p>
+    </section>
+    """
+    return HTMLResponse(html)
+
+4) Earnings → afficher le barème courant (append-only)
+
+Toujours dans app/routes/partners_ui.py, dans la route /partners/earnings (si présente), avant le return HTMLResponse(html), injecte :
+
+from app.services.pricing import current_offer
+offer = current_offer()
+tarif = (f"{offer['terms'].get('cpc','?'):.2f}€/clic" 
+         if offer["terms"]["mode"].startswith("cpc") 
+         else f"{int(offer['terms'].get('revshare_pct',.4)*100)}% rev-share")
+html = html.replace("</ul>", f"<li>Barème actuel: <b>{tarif}</b></li></ul>")
+
+
+(si la route n’existe pas chez toi, skip cette étape)
+
+5) (Optionnel) Autopilot → log “reprice” (append-only)
+
+app/aiops/actions.py – append en bas :
+
+from app.services.pricing import current_offer
+def act_reprice_offers(score: float = 0.6):
+    off = current_offer()
+    _log_action("REPRICE_OFFERS", None, off, score, executed=True, success=True)
+ACTIONS.append(act_reprice_offers)
+
+
+app/aiops/selector.py – dans propose_actions(...), ajoute une ligne dans la liste retournée :
+
+("act_reprice_offers", base + 0.06),
+
+6) Smoke tests (rapides)
+
+uvicorn up → visite /partners : le badge doit afficher “jusqu’à €X.XX par clic” (pas un montant fixe 0.20).
+
+Change OFFER_MODE dans .env → cpc_fixed/revshare/hybrid → /partners reflète le mode.
+
+/partners/earnings (connecté) → affiche Barème actuel sous les métriques.
+
+7) Notes
+
+cpc_dynamic protège la marge : CPC partenaire = EPC_7j * REVSHARE_BASE_PCT – CPC_SAFETY_MARGIN_EUR, borné [CPC_MIN_EUR ; CPC_MAX_EUR].
+
+Si pas encore de data → fallback DEFAULT_EPC_EUR.
+
+Tu peux tuner REVSHARE_BASE_PCT (0.35–0.5) et CPC_SAFETY_MARGIN_EUR (0.03–0.07) selon ton risque vs. volume.

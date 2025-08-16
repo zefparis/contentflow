@@ -1,0 +1,89 @@
+Smoke tests E2E (10 min)
+
+Submit BYOP (avec URL)
+
+curl -X POST https://<host>/api/byop/submit \
+  -H 'Content-Type: application/json' \
+  --cookie "partner_id=<PID>" \
+  -d '{"source_url":"https://www.youtube.com/watch?v=XXXXX","title":"Hack IA","description":"…","hashtags":"#ia #tools","cta":"Essaye →"}'
+
+
+→ expect { ok:true, submissionId, assetId }
+
+Pipeline pickup
+
+Check asset passe new → processing → ready (GET /api/assets/:assetId ou ta page “Gérer”).
+
+Vérifie que owner_partner_id est bien injecté dans le meta.
+
+Share Kit
+
+curl "https://<host>/api/byop/kit?submissionId=<SID>" --cookie "partner_id=<PID>"
+
+
+→ récupère shortUrl + shareText + intents (WA/TG/X).
+
+Ouvre un intent → vérifie l’encodage (pas de + foireux).
+
+Tracking
+
+Hit shortUrl 2–3 fois (user-agents différents).
+
+GET /api/metrics?partnerId=<PID>&kind=click&since=24h → expect +N clics (EPC si dispo).
+
+Email share (rate limit)
+
+curl -X POST https://<host>/api/byop/email \
+  --cookie "partner_id=<PID>" \
+  -d "submissionId=<SID>&emails=a@b.com,c@d.com"
+
+
+→ expect {ok:true} si < 200/j ; après 200 → HTTP 429.
+
+Vérifie présence #ad + lien de désinscription si Brevo branché.
+
+Auth/isolement
+
+Essaye /api/byop/kit?submissionId d’un autre partenaire → HTTP 401/404 (OK).
+
+🚀 Upgrades qui payent (safe, feature-flag)
+
+Publish BYOP sur les comptes du partenaire (credentials-aware)
+
+Flag: FEATURE_BYOP_PUBLISH=true.
+
+Si PartnerAccount(platform=X) présent ⇒ en plus du Share Kit, propose “Publier sur mes comptes” → route POST /api/byop/publish qui passe les tokens du partenaire à tes publishers (fallback: Share Kit only).
+
+Garde review ON par défaut (autopublish opt-in).
+
+Payout dynamique par partenaire (EPC_7d partner-scoped)
+
+Calcule epc_partner_7d = sum(amount_eur)/count(clicks) WHERE partner_id=:pid AND ts>=now()-7d.
+
+CPC_partner = clamp(epc_partner_7d * revshare_pct – safety_margin, [floor; ceiling]).
+
+Affiche le barème personnalisé sur /partners/earnings (motivant + protège la marge).
+
+Quality/anti-abus
+
+pHash + text-sim sur BYOP pour détecter doublons cross-partenaires → cooldown 24h si trop proche.
+
+Circuit-breaker email par domaine (évite bounces/spam traps) + blacklist de domaines jetables.
+
+Cool-off Share Kit : 30 sec entre deux clics mêmes IP/UA → soft-dedupe des clics.
+
+🧩 Micro-hooks UX (zero-risk)
+
+1-click CTA dans Share Kit : “Copier tout” + toasts.
+
+Pré-header “Tu peux stopper à tout moment” (réduit anxiété).
+
+Badges dynamiques “EPC 7j = X€” sur BYOP “Gérer”.
+
+📈 Runbook prod (72h)
+
+J0: Smoke tests ci-dessus, activer payout min 10€, pousser 10 partenaires pilotes.
+
+J1: Activer FEATURE_BYOP_PUBLISH pour 3 pilotes → publier 1 post/pilote/plateforme (review ON).
+
+J2: Switch pricing → CPC partner per-PID. Envoyer 1er email Brevo “Top posts à partager”.

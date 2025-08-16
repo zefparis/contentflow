@@ -1,0 +1,1118 @@
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ContentFlow - Automated Content Pipeline</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/htmx.org@1.9.10"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        'sans': ['Inter', 'system-ui', 'sans-serif'],
+                    },
+                    colors: {
+                        primary: {
+                            50: '#EEF2FF',
+                            500: '#6366F1',
+                            600: '#4F46E5',
+                            700: '#4338CA'
+                        }
+                    }
+                }
+            }
+        };
+    </script>
+</head>
+<body class="bg-gray-50 font-sans">
+    <!-- @COMPONENT: AppLayout -->
+    <div class="min-h-screen flex">
+        <!-- @COMPONENT: Sidebar -->
+        <aside class="w-64 bg-white shadow-sm border-r border-gray-200 flex-shrink-0">
+            <div class="p-6 border-b border-gray-200">
+                <div class="flex items-center space-x-3">
+                    <div class="w-8 h-8 bg-primary-600 rounded-lg flex items-center justify-center">
+                        <i class="fas fa-video text-white text-sm"></i>
+                    </div>
+                    <h1 class="text-xl font-bold text-gray-900">ContentFlow</h1>
+                </div>
+            </div>
+            
+            <nav class="p-4 space-y-2">
+                <a href="#dashboard" class="flex items-center space-x-3 px-3 py-2 text-primary-600 bg-primary-50 rounded-lg font-medium" data-nav-item="dashboard">
+                    <i class="fas fa-chart-line w-5"></i>
+                    <span>Dashboard</span>
+                </a>
+                <a href="#assets" class="flex items-center space-x-3 px-3 py-2 text-gray-700 hover:bg-gray-100 rounded-lg transition-colors" data-nav-item="assets">
+                    <i class="fas fa-folder w-5"></i>
+                    <span>Assets</span>
+                </a>
+                <a href="#composer" class="flex items-center space-x-3 px-3 py-2 text-gray-700 hover:bg-gray-100 rounded-lg transition-colors" data-nav-item="composer">
+                    <i class="fas fa-edit w-5"></i>
+                    <span>Composer</span>
+                </a>
+                <a href="#scheduler" class="flex items-center space-x-3 px-3 py-2 text-gray-700 hover:bg-gray-100 rounded-lg transition-colors" data-nav-item="scheduler">
+                    <i class="fas fa-clock w-5"></i>
+                    <span>Scheduler</span>
+                </a>
+                <a href="#runs" class="flex items-center space-x-3 px-3 py-2 text-gray-700 hover:bg-gray-100 rounded-lg transition-colors" data-nav-item="runs">
+                    <i class="fas fa-list w-5"></i>
+                    <span>Job Runs</span>
+                </a>
+                <a href="#reports" class="flex items-center space-x-3 px-3 py-2 text-gray-700 hover:bg-gray-100 rounded-lg transition-colors" data-nav-item="reports">
+                    <i class="fas fa-chart-bar w-5"></i>
+                    <span>Reports</span>
+                </a>
+            </nav>
+            
+            <div class="absolute bottom-4 left-4 right-4">
+                <div class="bg-gray-100 rounded-lg p-3">
+                    <div class="flex items-center justify-between text-xs text-gray-600">
+                        <span>System Status</span>
+                        <span class="flex items-center space-x-1">
+                            <div class="w-2 h-2 bg-green-500 rounded-full"></div>
+                            <span>Online</span>
+                        </span>
+                    </div>
+                </div>
+            </div>
+        </aside>
+        <!-- @END_COMPONENT: Sidebar -->
+
+        <!-- @COMPONENT: MainContent -->
+        <main class="flex-1 overflow-auto">
+            <!-- @COMPONENT: Header -->
+            <header class="bg-white border-b border-gray-200 px-6 py-4">
+                <div class="flex items-center justify-between">
+                    <div>
+                        <h2 class="text-2xl font-bold text-gray-900" data-bind="currentPageTitle">Dashboard</h2>
+                        <p class="text-gray-600 mt-1" data-bind="currentPageDescription">Monitor your content pipeline performance</p>
+                    </div>
+                    <div class="flex items-center space-x-4">
+                        <button class="px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition-colors font-medium" data-event="click:openAutopilotModal">
+                            <i class="fas fa-robot mr-2"></i>
+                            Autopilot
+                        </button>
+                    </div>
+                </div>
+            </header>
+            <!-- @END_COMPONENT: Header -->
+
+            <!-- @COMPONENT: DashboardView -->
+            <div class="p-6" id="dashboard-view">
+                <!-- KPI Cards -->
+                <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+                    <!-- @MAP: kpiCards.map(card => ( -->
+                    <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+                        <div class="flex items-center justify-between">
+                            <div>
+                                <p class="text-sm font-medium text-gray-600" data-bind="card.label">New Assets</p>
+                                <p class="text-3xl font-bold text-gray-900 mt-2" data-bind="card.value">12</p>
+                                <p class="text-sm text-green-600 mt-1">
+                                    <span data-bind="card.change">+2.5%</span> from last week
+                                </p>
+                            </div>
+                            <div class="w-12 h-12 bg-blue-100 rounded-lg flex items-center justify-center">
+                                <i class="fas fa-file-video text-blue-600"></i>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+                        <div class="flex items-center justify-between">
+                            <div>
+                                <p class="text-sm font-medium text-gray-600">Ready Assets</p>
+                                <p class="text-3xl font-bold text-gray-900 mt-2">28</p>
+                                <p class="text-sm text-green-600 mt-1">+8.1% from last week</p>
+                            </div>
+                            <div class="w-12 h-12 bg-green-100 rounded-lg flex items-center justify-center">
+                                <i class="fas fa-check-circle text-green-600"></i>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+                        <div class="flex items-center justify-between">
+                            <div>
+                                <p class="text-sm font-medium text-gray-600">Queued Posts</p>
+                                <p class="text-3xl font-bold text-gray-900 mt-2">15</p>
+                                <p class="text-sm text-amber-600 mt-1">3 publishing soon</p>
+                            </div>
+                            <div class="w-12 h-12 bg-amber-100 rounded-lg flex items-center justify-center">
+                                <i class="fas fa-clock text-amber-600"></i>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+                        <div class="flex items-center justify-between">
+                            <div>
+                                <p class="text-sm font-medium text-gray-600">Published Posts</p>
+                                <p class="text-3xl font-bold text-gray-900 mt-2">156</p>
+                                <p class="text-sm text-green-600 mt-1">+12% this month</p>
+                            </div>
+                            <div class="w-12 h-12 bg-purple-100 rounded-lg flex items-center justify-center">
+                                <i class="fas fa-share-alt text-purple-600"></i>
+                            </div>
+                        </div>
+                    </div>
+                    <!-- @END_MAP )) -->
+                </div>
+
+                <!-- Recent Activity & Pipeline Status -->
+                <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                    <!-- Recent Jobs -->
+                    <div class="bg-white rounded-xl shadow-sm border border-gray-200">
+                        <div class="p-6 border-b border-gray-200">
+                            <div class="flex items-center justify-between">
+                                <h3 class="text-lg font-semibold text-gray-900">Recent Jobs</h3>
+                                <button class="text-sm text-primary-600 hover:text-primary-700">View all</button>
+                            </div>
+                        </div>
+                        <div class="p-6">
+                            <!-- @MAP: recentJobs.map(job => ( -->
+                            <div class="flex items-center justify-between py-3 border-b border-gray-100 last:border-0">
+                                <div class="flex items-center space-x-3">
+                                    <div class="w-8 h-8 bg-green-100 rounded-full flex items-center justify-center">
+                                        <i class="fas fa-download text-green-600 text-xs"></i>
+                                    </div>
+                                    <div>
+                                        <p class="font-medium text-gray-900" data-bind="job.type">Ingest Job</p>
+                                        <p class="text-sm text-gray-500" data-bind="job.timestamp">2 minutes ago</p>
+                                    </div>
+                                </div>
+                                <span class="px-2 py-1 bg-green-100 text-green-800 rounded-full text-xs font-medium" data-bind="job.status">Complete</span>
+                            </div>
+
+                            <div class="flex items-center justify-between py-3 border-b border-gray-100 last:border-0">
+                                <div class="flex items-center space-x-3">
+                                    <div class="w-8 h-8 bg-blue-100 rounded-full flex items-center justify-center">
+                                        <i class="fas fa-cog text-blue-600 text-xs"></i>
+                                    </div>
+                                    <div>
+                                        <p class="font-medium text-gray-900">Transform Job</p>
+                                        <p class="text-sm text-gray-500">5 minutes ago</p>
+                                    </div>
+                                </div>
+                                <span class="px-2 py-1 bg-blue-100 text-blue-800 rounded-full text-xs font-medium">Running</span>
+                            </div>
+
+                            <div class="flex items-center justify-between py-3">
+                                <div class="flex items-center space-x-3">
+                                    <div class="w-8 h-8 bg-purple-100 rounded-full flex items-center justify-center">
+                                        <i class="fas fa-share text-purple-600 text-xs"></i>
+                                    </div>
+                                    <div>
+                                        <p class="font-medium text-gray-900">Publish Job</p>
+                                        <p class="text-sm text-gray-500">8 minutes ago</p>
+                                    </div>
+                                </div>
+                                <span class="px-2 py-1 bg-green-100 text-green-800 rounded-full text-xs font-medium">Complete</span>
+                            </div>
+                            <!-- @END_MAP )) -->
+                        </div>
+                    </div>
+
+                    <!-- Pipeline Flow -->
+                    <div class="bg-white rounded-xl shadow-sm border border-gray-200">
+                        <div class="p-6 border-b border-gray-200">
+                            <h3 class="text-lg font-semibold text-gray-900">Pipeline Flow</h3>
+                        </div>
+                        <div class="p-6">
+                            <div class="space-y-4">
+                                <div class="flex items-center justify-between">
+                                    <div class="flex items-center space-x-3">
+                                        <div class="w-10 h-10 bg-blue-600 rounded-lg flex items-center justify-center">
+                                            <i class="fas fa-download text-white"></i>
+                                        </div>
+                                        <div>
+                                            <p class="font-medium text-gray-900">Ingest</p>
+                                            <p class="text-sm text-gray-500">RSS & YouTube sources</p>
+                                        </div>
+                                    </div>
+                                    <div class="text-right">
+                                        <p class="text-sm font-medium text-gray-900">12 assets</p>
+                                        <p class="text-xs text-gray-500">Next: 15min</p>
+                                    </div>
+                                </div>
+
+                                <div class="flex justify-center">
+                                    <i class="fas fa-arrow-down text-gray-400"></i>
+                                </div>
+
+                                <div class="flex items-center justify-between">
+                                    <div class="flex items-center space-x-3">
+                                        <div class="w-10 h-10 bg-green-600 rounded-lg flex items-center justify-center">
+                                            <i class="fas fa-cog text-white"></i>
+                                        </div>
+                                        <div>
+                                            <p class="font-medium text-gray-900">Transform</p>
+                                            <p class="text-sm text-gray-500">FFmpeg processing</p>
+                                        </div>
+                                    </div>
+                                    <div class="text-right">
+                                        <p class="text-sm font-medium text-gray-900">28 ready</p>
+                                        <p class="text-xs text-gray-500">Next: 8min</p>
+                                    </div>
+                                </div>
+
+                                <div class="flex justify-center">
+                                    <i class="fas fa-arrow-down text-gray-400"></i>
+                                </div>
+
+                                <div class="flex items-center justify-between">
+                                    <div class="flex items-center space-x-3">
+                                        <div class="w-10 h-10 bg-purple-600 rounded-lg flex items-center justify-center">
+                                            <i class="fas fa-share-alt text-white"></i>
+                                        </div>
+                                        <div>
+                                            <p class="font-medium text-gray-900">Publish</p>
+                                            <p class="text-sm text-gray-500">Multi-platform distribution</p>
+                                        </div>
+                                    </div>
+                                    <div class="text-right">
+                                        <p class="text-sm font-medium text-gray-900">15 queued</p>
+                                        <p class="text-xs text-gray-500">Next: 5min</p>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <!-- @END_COMPONENT: DashboardView -->
+
+            <!-- @COMPONENT: AssetsView -->
+            <div class="p-6 hidden" id="assets-view">
+                <div class="bg-white rounded-xl shadow-sm border border-gray-200">
+                    <div class="p-6 border-b border-gray-200">
+                        <div class="flex items-center justify-between">
+                            <h3 class="text-lg font-semibold text-gray-900">Assets</h3>
+                            <div class="flex items-center space-x-3">
+                                <select class="border border-gray-300 rounded-lg px-3 py-2 text-sm">
+                                    <option>All Status</option>
+                                    <option>New</option>
+                                    <option>Ready</option>
+                                    <option>Failed</option>
+                                </select>
+                                <button class="px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition-colors text-sm font-medium" data-event="click:triggerTransformAll">
+                                    <i class="fas fa-cog mr-2"></i>
+                                    Transform All
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="overflow-x-auto">
+                        <table class="w-full">
+                            <thead class="bg-gray-50 border-b border-gray-200">
+                                <tr>
+                                    <th class="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">Asset</th>
+                                    <th class="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">Source</th>
+                                    <th class="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
+                                    <th class="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">Duration</th>
+                                    <th class="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">Created</th>
+                                    <th class="text-right px-6 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody class="divide-y divide-gray-200">
+                                <!-- @MAP: assets.map(asset => ( -->
+                                <tr class="hover:bg-gray-50" data-mock="true">
+                                    <td class="px-6 py-4">
+                                        <div class="flex items-center space-x-3">
+                                            <div class="w-10 h-10 bg-gray-200 rounded-lg flex items-center justify-center">
+                                                <i class="fas fa-video text-gray-500"></i>
+                                            </div>
+                                            <div>
+                                                <p class="font-medium text-gray-900" data-bind="asset.title">Tech News Highlight #1</p>
+                                                <p class="text-sm text-gray-500" data-bind="asset.s3Key">assets/video_001.mp4</p>
+                                            </div>
+                                        </div>
+                                    </td>
+                                    <td class="px-6 py-4">
+                                        <span class="px-2 py-1 bg-blue-100 text-blue-800 rounded-full text-xs font-medium" data-bind="asset.sourceType">RSS</span>
+                                    </td>
+                                    <td class="px-6 py-4">
+                                        <span class="px-2 py-1 bg-green-100 text-green-800 rounded-full text-xs font-medium" data-bind="asset.status">Ready</span>
+                                    </td>
+                                    <td class="px-6 py-4 text-sm text-gray-900" data-bind="asset.duration">3:24</td>
+                                    <td class="px-6 py-4 text-sm text-gray-500" data-bind="asset.createdAt">2 hours ago</td>
+                                    <td class="px-6 py-4 text-right">
+                                        <button class="text-primary-600 hover:text-primary-700 text-sm font-medium mr-3" data-event="click:transformAsset" data-implementation="Should trigger transform job for this asset">
+                                            Transform
+                                        </button>
+                                        <button class="text-gray-400 hover:text-gray-600">
+                                            <i class="fas fa-ellipsis-h"></i>
+                                        </button>
+                                    </td>
+                                </tr>
+
+                                <tr class="hover:bg-gray-50" data-mock="true">
+                                    <td class="px-6 py-4">
+                                        <div class="flex items-center space-x-3">
+                                            <div class="w-10 h-10 bg-gray-200 rounded-lg flex items-center justify-center">
+                                                <i class="fas fa-video text-gray-500"></i>
+                                            </div>
+                                            <div>
+                                                <p class="font-medium text-gray-900">YouTube CC Extract #2</p>
+                                                <p class="text-sm text-gray-500">assets/video_002.mp4</p>
+                                            </div>
+                                        </div>
+                                    </td>
+                                    <td class="px-6 py-4">
+                                        <span class="px-2 py-1 bg-red-100 text-red-800 rounded-full text-xs font-medium">YouTube CC</span>
+                                    </td>
+                                    <td class="px-6 py-4">
+                                        <span class="px-2 py-1 bg-yellow-100 text-yellow-800 rounded-full text-xs font-medium">New</span>
+                                    </td>
+                                    <td class="px-6 py-4 text-sm text-gray-900">—</td>
+                                    <td class="px-6 py-4 text-sm text-gray-500">1 hour ago</td>
+                                    <td class="px-6 py-4 text-right">
+                                        <button class="text-primary-600 hover:text-primary-700 text-sm font-medium mr-3">
+                                            Transform
+                                        </button>
+                                        <button class="text-gray-400 hover:text-gray-600">
+                                            <i class="fas fa-ellipsis-h"></i>
+                                        </button>
+                                    </td>
+                                </tr>
+
+                                <tr class="hover:bg-gray-50" data-mock="true">
+                                    <td class="px-6 py-4">
+                                        <div class="flex items-center space-x-3">
+                                            <div class="w-10 h-10 bg-gray-200 rounded-lg flex items-center justify-center">
+                                                <i class="fas fa-video text-gray-500"></i>
+                                            </div>
+                                            <div>
+                                                <p class="font-medium text-gray-900">Stock Content #3</p>
+                                                <p class="text-sm text-gray-500">assets/video_003.mp4</p>
+                                            </div>
+                                        </div>
+                                    </td>
+                                    <td class="px-6 py-4">
+                                        <span class="px-2 py-1 bg-green-100 text-green-800 rounded-full text-xs font-medium">Stock</span>
+                                    </td>
+                                    <td class="px-6 py-4">
+                                        <span class="px-2 py-1 bg-red-100 text-red-800 rounded-full text-xs font-medium">Failed</span>
+                                    </td>
+                                    <td class="px-6 py-4 text-sm text-gray-900">—</td>
+                                    <td class="px-6 py-4 text-sm text-gray-500">3 hours ago</td>
+                                    <td class="px-6 py-4 text-right">
+                                        <button class="text-primary-600 hover:text-primary-700 text-sm font-medium mr-3">
+                                            Retry
+                                        </button>
+                                        <button class="text-gray-400 hover:text-gray-600">
+                                            <i class="fas fa-ellipsis-h"></i>
+                                        </button>
+                                    </td>
+                                </tr>
+                                <!-- @END_MAP )) -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+            <!-- @END_COMPONENT: AssetsView -->
+
+            <!-- @COMPONENT: ComposerView -->
+            <div class="p-6 hidden" id="composer-view">
+                <div class="max-w-4xl mx-auto">
+                    <div class="bg-white rounded-xl shadow-sm border border-gray-200">
+                        <div class="p-6 border-b border-gray-200">
+                            <h3 class="text-lg font-semibold text-gray-900">Content Composer</h3>
+                            <p class="text-gray-600 mt-1">Edit and queue posts for publishing</p>
+                        </div>
+                        <div class="p-6">
+                            <form class="space-y-6" data-implementation="Should handle post composition and queueing">
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700 mb-2">Select Post</label>
+                                    <select class="w-full border border-gray-300 rounded-lg px-3 py-2" data-bind="selectedPost">
+                                        <option>Post #1 - Tech News Highlight</option>
+                                        <option>Post #2 - YouTube Extract</option>
+                                        <option>Post #3 - Stock Content</option>
+                                    </select>
+                                </div>
+
+                                <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                                    <div>
+                                        <div class="space-y-4">
+                                            <div>
+                                                <label class="block text-sm font-medium text-gray-700 mb-2">Title</label>
+                                                <input type="text" class="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-primary-500 focus:border-primary-500" data-bind="post.title" data-mock="true" value="🚀 Amazing Tech Breakthrough You NEED to See!" placeholder="Enter compelling title">
+                                            </div>
+
+                                            <div>
+                                                <label class="block text-sm font-medium text-gray-700 mb-2">Description</label>
+                                                <textarea rows="4" class="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-primary-500 focus:border-primary-500" data-bind="post.description" data-mock="true" placeholder="Enter post description">This revolutionary technology is changing everything! Don't miss out on this incredible innovation that's taking the world by storm. #ad</textarea>
+                                            </div>
+
+                                            <div>
+                                                <label class="block text-sm font-medium text-gray-700 mb-2">Call to Action</label>
+                                                <input type="text" class="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-primary-500 focus:border-primary-500" data-bind="post.cta" data-mock="true" value="Learn More 👉" placeholder="Enter call to action">
+                                            </div>
+
+                                            <div>
+                                                <label class="block text-sm font-medium text-gray-700 mb-2">Platform</label>
+                                                <div class="grid grid-cols-3 gap-3">
+                                                    <label class="flex items-center p-3 border border-gray-300 rounded-lg cursor-pointer hover:bg-gray-50">
+                                                        <input type="checkbox" class="sr-only" checked>
+                                                        <div class="flex items-center space-x-2">
+                                                            <i class="fab fa-instagram text-purple-600"></i>
+                                                            <span class="text-sm font-medium">Instagram</span>
+                                                        </div>
+                                                    </label>
+                                                    <label class="flex items-center p-3 border border-gray-300 rounded-lg cursor-pointer hover:bg-gray-50">
+                                                        <input type="checkbox" class="sr-only">
+                                                        <div class="flex items-center space-x-2">
+                                                            <i class="fab fa-tiktok text-black"></i>
+                                                            <span class="text-sm font-medium">TikTok</span>
+                                                        </div>
+                                                    </label>
+                                                    <label class="flex items-center p-3 border border-gray-300 rounded-lg cursor-pointer hover:bg-gray-50">
+                                                        <input type="checkbox" class="sr-only" checked>
+                                                        <div class="flex items-center space-x-2">
+                                                            <i class="fab fa-youtube text-red-600"></i>
+                                                            <span class="text-sm font-medium">YouTube</span>
+                                                        </div>
+                                                    </label>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <div>
+                                        <div class="bg-gray-50 rounded-lg p-4">
+                                            <h4 class="font-medium text-gray-900 mb-3">Preview</h4>
+                                            <!-- Modern smartphone aspect ratio preview with sleek design -->
+                                            <div class="bg-black rounded-2xl p-3 mx-auto" style="width: 200px; height: 356px;">
+                                                <div class="bg-gray-800 rounded-xl w-full h-full flex items-center justify-center">
+                                                    <div class="text-center text-white">
+                                                        <i class="fas fa-play-circle text-4xl mb-2 opacity-70"></i>
+                                                        <p class="text-xs opacity-70">Video Preview</p>
+                                                        <p class="text-xs opacity-70">1080x1920</p>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                            
+                                            <div class="mt-4 p-3 bg-white rounded-lg border">
+                                                <p class="text-sm font-medium text-gray-900" data-bind="preview.title">🚀 Amazing Tech Breakthrough You NEED to See!</p>
+                                                <p class="text-xs text-gray-600 mt-1" data-bind="preview.description">This revolutionary technology is changing everything! Don't miss out on this incredible innovation... #ad</p>
+                                                <p class="text-xs text-primary-600 mt-2 font-medium" data-bind="preview.cta">Learn More 👉</p>
+                                            </div>
+                                        </div>
+
+                                        <div class="mt-4 p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
+                                            <div class="flex items-start space-x-2">
+                                                <i class="fas fa-exclamation-triangle text-yellow-600 mt-0.5"></i>
+                                                <div>
+                                                    <p class="text-sm font-medium text-yellow-800">Compliance Check</p>
+                                                    <p class="text-xs text-yellow-700 mt-1">Risk Score: 0.3/1.0 (Low)</p>
+                                                    <p class="text-xs text-yellow-700">✓ Attribution included ✓ #ad disclosure present</p>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div class="flex items-center justify-between pt-6 border-t border-gray-200">
+                                    <div class="flex items-center space-x-4">
+                                        <button type="button" class="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors">
+                                            Save Draft
+                                        </button>
+                                        <button type="button" class="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors">
+                                            Preview
+                                        </button>
+                                    </div>
+                                    <button type="submit" class="px-6 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition-colors font-medium" data-event="click:queuePost">
+                                        <i class="fas fa-clock mr-2"></i>
+                                        Queue for Publishing
+                                    </button>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <!-- @END_COMPONENT: ComposerView -->
+
+            <!-- @COMPONENT: SchedulerView -->
+            <div class="p-6 hidden" id="scheduler-view">
+                <div class="max-w-4xl mx-auto space-y-6">
+                    <!-- Quick Actions -->
+                    <div class="bg-white rounded-xl shadow-sm border border-gray-200">
+                        <div class="p-6 border-b border-gray-200">
+                            <h3 class="text-lg font-semibold text-gray-900">Job Scheduler</h3>
+                            <p class="text-gray-600 mt-1">Manually trigger pipeline jobs or view automated schedule</p>
+                        </div>
+                        <div class="p-6">
+                            <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                <button class="p-6 border-2 border-blue-200 rounded-xl hover:border-blue-300 hover:bg-blue-50 transition-colors group" data-event="click:runIngestJob" data-implementation="Should trigger immediate ingest job execution">
+                                    <div class="text-center">
+                                        <div class="w-12 h-12 bg-blue-600 rounded-lg flex items-center justify-center mx-auto mb-3 group-hover:scale-105 transition-transform">
+                                            <i class="fas fa-download text-white"></i>
+                                        </div>
+                                        <h4 class="font-semibold text-gray-900">Run Ingest</h4>
+                                        <p class="text-sm text-gray-600 mt-1">Fetch new content from sources</p>
+                                        <div class="mt-3 px-3 py-1 bg-blue-100 text-blue-800 rounded-full text-xs">
+                                            Next: 15 min
+                                        </div>
+                                    </div>
+                                </button>
+
+                                <button class="p-6 border-2 border-green-200 rounded-xl hover:border-green-300 hover:bg-green-50 transition-colors group" data-event="click:runTransformJob">
+                                    <div class="text-center">
+                                        <div class="w-12 h-12 bg-green-600 rounded-lg flex items-center justify-center mx-auto mb-3 group-hover:scale-105 transition-transform">
+                                            <i class="fas fa-cog text-white"></i>
+                                        </div>
+                                        <h4 class="font-semibold text-gray-900">Run Transform</h4>
+                                        <p class="text-sm text-gray-600 mt-1">Process assets with FFmpeg</p>
+                                        <div class="mt-3 px-3 py-1 bg-green-100 text-green-800 rounded-full text-xs">
+                                            Next: 8 min
+                                        </div>
+                                    </div>
+                                </button>
+
+                                <button class="p-6 border-2 border-purple-200 rounded-xl hover:border-purple-300 hover:bg-purple-50 transition-colors group" data-event="click:runPublishJob">
+                                    <div class="text-center">
+                                        <div class="w-12 h-12 bg-purple-600 rounded-lg flex items-center justify-center mx-auto mb-3 group-hover:scale-105 transition-transform">
+                                            <i class="fas fa-share-alt text-white"></i>
+                                        </div>
+                                        <h4 class="font-semibold text-gray-900">Run Publish</h4>
+                                        <p class="text-sm text-gray-600 mt-1">Publish queued posts</p>
+                                        <div class="mt-3 px-3 py-1 bg-purple-100 text-purple-800 rounded-full text-xs">
+                                            Next: 5 min
+                                        </div>
+                                    </div>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Schedule Configuration -->
+                    <div class="bg-white rounded-xl shadow-sm border border-gray-200">
+                        <div class="p-6 border-b border-gray-200">
+                            <h3 class="text-lg font-semibold text-gray-900">Automated Schedule</h3>
+                        </div>
+                        <div class="p-6">
+                            <div class="space-y-4">
+                                <div class="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
+                                    <div class="flex items-center space-x-4">
+                                        <div class="w-10 h-10 bg-blue-600 rounded-lg flex items-center justify-center">
+                                            <i class="fas fa-download text-white"></i>
+                                        </div>
+                                        <div>
+                                            <h4 class="font-medium text-gray-900">Ingest Job</h4>
+                                            <p class="text-sm text-gray-600">Runs every 30 minutes</p>
+                                        </div>
+                                    </div>
+                                    <div class="flex items-center space-x-3">
+                                        <span class="px-3 py-1 bg-green-100 text-green-800 rounded-full text-xs font-medium">Active</span>
+                                        <button class="text-gray-400 hover:text-gray-600">
+                                            <i class="fas fa-cog"></i>
+                                        </button>
+                                    </div>
+                                </div>
+
+                                <div class="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
+                                    <div class="flex items-center space-x-4">
+                                        <div class="w-10 h-10 bg-green-600 rounded-lg flex items-center justify-center">
+                                            <i class="fas fa-cog text-white"></i>
+                                        </div>
+                                        <div>
+                                            <h4 class="font-medium text-gray-900">Transform Job</h4>
+                                            <p class="text-sm text-gray-600">Runs every 30 minutes</p>
+                                        </div>
+                                    </div>
+                                    <div class="flex items-center space-x-3">
+                                        <span class="px-3 py-1 bg-green-100 text-green-800 rounded-full text-xs font-medium">Active</span>
+                                        <button class="text-gray-400 hover:text-gray-600">
+                                            <i class="fas fa-cog"></i>
+                                        </button>
+                                    </div>
+                                </div>
+
+                                <div class="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
+                                    <div class="flex items-center space-x-4">
+                                        <div class="w-10 h-10 bg-purple-600 rounded-lg flex items-center justify-center">
+                                            <i class="fas fa-share-alt text-white"></i>
+                                        </div>
+                                        <div>
+                                            <h4 class="font-medium text-gray-900">Publish Job</h4>
+                                            <p class="text-sm text-gray-600">Runs every 20 minutes</p>
+                                        </div>
+                                    </div>
+                                    <div class="flex items-center space-x-3">
+                                        <span class="px-3 py-1 bg-green-100 text-green-800 rounded-full text-xs font-medium">Active</span>
+                                        <button class="text-gray-400 hover:text-gray-600">
+                                            <i class="fas fa-cog"></i>
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <!-- @END_COMPONENT: SchedulerView -->
+
+            <!-- @COMPONENT: RunsView -->
+            <div class="p-6 hidden" id="runs-view">
+                <div class="bg-white rounded-xl shadow-sm border border-gray-200">
+                    <div class="p-6 border-b border-gray-200">
+                        <div class="flex items-center justify-between">
+                            <h3 class="text-lg font-semibold text-gray-900">Job Execution History</h3>
+                            <div class="flex items-center space-x-3">
+                                <select class="border border-gray-300 rounded-lg px-3 py-2 text-sm">
+                                    <option>All Jobs</option>
+                                    <option>Ingest</option>
+                                    <option>Transform</option>
+                                    <option>Publish</option>
+                                </select>
+                                <button class="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors text-sm">
+                                    <i class="fas fa-refresh mr-2"></i>
+                                    Refresh
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="overflow-x-auto">
+                        <table class="w-full">
+                            <thead class="bg-gray-50 border-b border-gray-200">
+                                <tr>
+                                    <th class="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">Job Type</th>
+                                    <th class="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
+                                    <th class="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">Duration</th>
+                                    <th class="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">Started</th>
+                                    <th class="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">Logs</th>
+                                    <th class="text-right px-6 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody class="divide-y divide-gray-200">
+                                <!-- @MAP: jobRuns.map(run => ( -->
+                                <tr class="hover:bg-gray-50" data-mock="true">
+                                    <td class="px-6 py-4">
+                                        <div class="flex items-center space-x-3">
+                                            <div class="w-8 h-8 bg-blue-100 rounded-lg flex items-center justify-center">
+                                                <i class="fas fa-download text-blue-600 text-xs"></i>
+                                            </div>
+                                            <span class="font-medium text-gray-900" data-bind="run.type">Ingest</span>
+                                        </div>
+                                    </td>
+                                    <td class="px-6 py-4">
+                                        <span class="px-2 py-1 bg-green-100 text-green-800 rounded-full text-xs font-medium" data-bind="run.status">Completed</span>
+                                    </td>
+                                    <td class="px-6 py-4 text-sm text-gray-900" data-bind="run.duration">2.3s</td>
+                                    <td class="px-6 py-4 text-sm text-gray-500" data-bind="run.startedAt">2 minutes ago</td>
+                                    <td class="px-6 py-4">
+                                        <span class="text-sm text-gray-600" data-bind="run.shortLog">Successfully ingested 3 new assets from RSS feed</span>
+                                    </td>
+                                    <td class="px-6 py-4 text-right">
+                                        <button class="text-primary-600 hover:text-primary-700 text-sm font-medium" data-event="click:viewFullLogs">
+                                            View Logs
+                                        </button>
+                                    </td>
+                                </tr>
+
+                                <tr class="hover:bg-gray-50" data-mock="true">
+                                    <td class="px-6 py-4">
+                                        <div class="flex items-center space-x-3">
+                                            <div class="w-8 h-8 bg-green-100 rounded-lg flex items-center justify-center">
+                                                <i class="fas fa-cog text-green-600 text-xs"></i>
+                                            </div>
+                                            <span class="font-medium text-gray-900">Transform</span>
+                                        </div>
+                                    </td>
+                                    <td class="px-6 py-4">
+                                        <span class="px-2 py-1 bg-blue-100 text-blue-800 rounded-full text-xs font-medium">Running</span>
+                                    </td>
+                                    <td class="px-6 py-4 text-sm text-gray-900">45.2s</td>
+                                    <td class="px-6 py-4 text-sm text-gray-500">5 minutes ago</td>
+                                    <td class="px-6 py-4">
+                                        <span class="text-sm text-gray-600">Processing asset video_002.mp4 with FFmpeg...</span>
+                                    </td>
+                                    <td class="px-6 py-4 text-right">
+                                        <button class="text-primary-600 hover:text-primary-700 text-sm font-medium">
+                                            View Logs
+                                        </button>
+                                    </td>
+                                </tr>
+
+                                <tr class="hover:bg-gray-50" data-mock="true">
+                                    <td class="px-6 py-4">
+                                        <div class="flex items-center space-x-3">
+                                            <div class="w-8 h-8 bg-purple-100 rounded-lg flex items-center justify-center">
+                                                <i class="fas fa-share text-purple-600 text-xs"></i>
+                                            </div>
+                                            <span class="font-medium text-gray-900">Publish</span>
+                                        </div>
+                                    </td>
+                                    <td class="px-6 py-4">
+                                        <span class="px-2 py-1 bg-green-100 text-green-800 rounded-full text-xs font-medium">Completed</span>
+                                    </td>
+                                    <td class="px-6 py-4 text-sm text-gray-900">1.8s</td>
+                                    <td class="px-6 py-4 text-sm text-gray-500">8 minutes ago</td>
+                                    <td class="px-6 py-4">
+                                        <span class="text-sm text-gray-600">Published 2 posts to Instagram, TikTok</span>
+                                    </td>
+                                    <td class="px-6 py-4 text-right">
+                                        <button class="text-primary-600 hover:text-primary-700 text-sm font-medium">
+                                            View Logs
+                                        </button>
+                                    </td>
+                                </tr>
+
+                                <tr class="hover:bg-gray-50" data-mock="true">
+                                    <td class="px-6 py-4">
+                                        <div class="flex items-center space-x-3">
+                                            <div class="w-8 h-8 bg-green-100 rounded-lg flex items-center justify-center">
+                                                <i class="fas fa-cog text-green-600 text-xs"></i>
+                                            </div>
+                                            <span class="font-medium text-gray-900">Transform</span>
+                                        </div>
+                                    </td>
+                                    <td class="px-6 py-4">
+                                        <span class="px-2 py-1 bg-red-100 text-red-800 rounded-full text-xs font-medium">Failed</span>
+                                    </td>
+                                    <td class="px-6 py-4 text-sm text-gray-900">12.4s</td>
+                                    <td class="px-6 py-4 text-sm text-gray-500">15 minutes ago</td>
+                                    <td class="px-6 py-4">
+                                        <span class="text-sm text-gray-600">FFmpeg error: Invalid input format</span>
+                                    </td>
+                                    <td class="px-6 py-4 text-right">
+                                        <button class="text-primary-600 hover:text-primary-700 text-sm font-medium">
+                                            View Logs
+                                        </button>
+                                    </td>
+                                </tr>
+                                <!-- @END_MAP )) -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+            <!-- @END_COMPONENT: RunsView -->
+
+            <!-- @COMPONENT: ReportsView -->
+            <div class="p-6 hidden" id="reports-view">
+                <div class="max-w-4xl mx-auto space-y-6">
+                    <!-- Revenue Simulator -->
+                    <div class="bg-white rounded-xl shadow-sm border border-gray-200">
+                        <div class="p-6 border-b border-gray-200">
+                            <h3 class="text-lg font-semibold text-gray-900">Revenue Simulator</h3>
+                            <p class="text-gray-600 mt-1">Calculate potential earnings based on performance metrics</p>
+                        </div>
+                        <div class="p-6">
+                            <form class="grid grid-cols-1 lg:grid-cols-2 gap-6" hx-post="/api/reports/calculate" hx-target="#revenue-result" hx-trigger="input changed delay:500ms from:input">
+                                <div class="space-y-4">
+                                    <div>
+                                        <label class="block text-sm font-medium text-gray-700 mb-2">Monthly Views</label>
+                                        <input type="number" name="views" class="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-primary-500 focus:border-primary-500" value="100000" data-mock="true">
+                                        <p class="text-xs text-gray-500 mt-1">Expected number of video views per month</p>
+                                    </div>
+
+                                    <div>
+                                        <label class="block text-sm font-medium text-gray-700 mb-2">Click-Through Rate (%)</label>
+                                        <input type="number" name="ctr" step="0.01" class="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-primary-500 focus:border-primary-500" value="2.5" data-mock="true">
+                                        <p class="text-xs text-gray-500 mt-1">Percentage of viewers who click affiliate links</p>
+                                    </div>
+
+                                    <div>
+                                        <label class="block text-sm font-medium text-gray-700 mb-2">Earnings Per Click (€)</label>
+                                        <input type="number" name="epc" step="0.01" class="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-primary-500 focus:border-primary-500" value="0.75" data-mock="true">
+                                        <p class="text-xs text-gray-500 mt-1">Average commission per affiliate click</p>
+                                    </div>
+
+                                    <div>
+                                        <label class="block text-sm font-medium text-gray-700 mb-2">Content Platform</label>
+                                        <select name="platform" class="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-primary-500 focus:border-primary-500">
+                                            <option value="instagram">Instagram Reels</option>
+                                            <option value="tiktok">TikTok</option>
+                                            <option value="youtube">YouTube Shorts</option>
+                                            <option value="mixed">Mixed Platforms</option>
+                                        </select>
+                                    </div>
+                                </div>
+
+                                <div>
+                                    <!-- Revenue Result -->
+                                    <div id="revenue-result" class="space-y-4">
+                                        <div class="bg-gradient-to-br from-primary-50 to-purple-50 rounded-xl p-6 border border-primary-200">
+                                            <h4 class="text-lg font-semibold text-gray-900 mb-4">Projected Monthly Revenue</h4>
+                                            <div class="text-center">
+                                                <div class="text-4xl font-bold text-primary-600 mb-2" data-bind="calculated.monthlyRevenue">€1,875</div>
+                                                <p class="text-sm text-gray-600">Based on 100,000 views × 2.5% CTR × €0.75 EPC</p>
+                                            </div>
+                                            
+                                            <div class="grid grid-cols-2 gap-4 mt-6 pt-4 border-t border-primary-200">
+                                                <div class="text-center">
+                                                    <div class="text-xl font-semibold text-gray-900" data-bind="calculated.monthlyClicks">2,500</div>
+                                                    <p class="text-xs text-gray-600">Monthly Clicks</p>
+                                                </div>
+                                                <div class="text-center">
+                                                    <div class="text-xl font-semibold text-gray-900" data-bind="calculated.annualRevenue">€22,500</div>
+                                                    <p class="text-xs text-gray-600">Annual Projection</p>
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        <div class="space-y-3">
+                                            <div class="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                                                <span class="text-sm text-gray-600">Daily Revenue</span>
+                                                <span class="font-medium text-gray-900" data-bind="calculated.dailyRevenue">€62.50</span>
+                                            </div>
+                                            <div class="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                                                <span class="text-sm text-gray-600">Weekly Revenue</span>
+                                                <span class="font-medium text-gray-900" data-bind="calculated.weeklyRevenue">€437.50</span>
+                                            </div>
+                                            <div class="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                                                <span class="text-sm text-gray-600">Revenue per 1000 Views</span>
+                                                <span class="font-medium text-gray-900" data-bind="calculated.rpmRevenue">€18.75</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+
+                    <!-- Performance Analytics -->
+                    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                        <div class="bg-white rounded-xl shadow-sm border border-gray-200">
+                            <div class="p-6 border-b border-gray-200">
+                                <h3 class="text-lg font-semibold text-gray-900">Top Performing Content</h3>
+                            </div>
+                            <div class="p-6">
+                                <div class="space-y-4">
+                                    <!-- @MAP: topContent.map(item => ( -->
+                                    <div class="flex items-center justify-between p-3 border border-gray-200 rounded-lg" data-mock="true">
+                                        <div class="flex items-center space-x-3">
+                                            <div class="w-10 h-10 bg-gray-200 rounded-lg flex items-center justify-center">
+                                                <i class="fas fa-video text-gray-500"></i>
+                                            </div>
+                                            <div>
+                                                <p class="font-medium text-gray-900 text-sm" data-bind="item.title">Tech News Highlight #1</p>
+                                                <p class="text-xs text-gray-500" data-bind="item.platform">Instagram • 2 days ago</p>
+                                            </div>
+                                        </div>
+                                        <div class="text-right">
+                                            <p class="text-sm font-medium text-gray-900" data-bind="item.revenue">€127</p>
+                                            <p class="text-xs text-gray-500" data-bind="item.views">12.5K views</p>
+                                        </div>
+                                    </div>
+
+                                    <div class="flex items-center justify-between p-3 border border-gray-200 rounded-lg" data-mock="true">
+                                        <div class="flex items-center space-x-3">
+                                            <div class="w-10 h-10 bg-gray-200 rounded-lg flex items-center justify-center">
+                                                <i class="fas fa-video text-gray-500"></i>
+                                            </div>
+                                            <div>
+                                                <p class="font-medium text-gray-900 text-sm">YouTube Extract #2</p>
+                                                <p class="text-xs text-gray-500">TikTok • 1 day ago</p>
+                                            </div>
+                                        </div>
+                                        <div class="text-right">
+                                            <p class="text-sm font-medium text-gray-900">€89</p>
+                                            <p class="text-xs text-gray-500">8.3K views</p>
+                                        </div>
+                                    </div>
+
+                                    <div class="flex items-center justify-between p-3 border border-gray-200 rounded-lg" data-mock="true">
+                                        <div class="flex items-center space-x-3">
+                                            <div class="w-10 h-10 bg-gray-200 rounded-lg flex items-center justify-center">
+                                                <i class="fas fa-video text-gray-500"></i>
+                                            </div>
+                                            <div>
+                                                <p class="font-medium text-gray-900 text-sm">Stock Content #3</p>
+                                                <p class="text-xs text-gray-500">YouTube • 3 days ago</p>
+                                            </div>
+                                        </div>
+                                        <div class="text-right">
+                                            <p class="text-sm font-medium text-gray-900">€56</p>
+                                            <p class="text-xs text-gray-500">5.2K views</p>
+                                        </div>
+                                    </div>
+                                    <!-- @END_MAP )) -->
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="bg-white rounded-xl shadow-sm border border-gray-200">
+                            <div class="p-6 border-b border-gray-200">
+                                <h3 class="text-lg font-semibold text-gray-900">Platform Performance</h3>
+                            </div>
+                            <div class="p-6">
+                                <div class="space-y-4">
+                                    <div class="flex items-center justify-between p-4 bg-purple-50 rounded-lg border border-purple-200">
+                                        <div class="flex items-center space-x-3">
+                                            <i class="fab fa-instagram text-purple-600 text-xl"></i>
+                                            <div>
+                                                <p class="font-medium text-gray-900">Instagram</p>
+                                                <p class="text-sm text-gray-600">45 posts this month</p>
+                                            </div>
+                                        </div>
+                                        <div class="text-right">
+                                            <p class="text-lg font-semibold text-gray-900">€892</p>
+                                            <p class="text-sm text-green-600">+15% vs last month</p>
+                                        </div>
+                                    </div>
+
+                                    <div class="flex items-center justify-between p-4 bg-gray-50 rounded-lg border border-gray-200">
+                                        <div class="flex items-center space-x-3">
+                                            <i class="fab fa-tiktok text-black text-xl"></i>
+                                            <div>
+                                                <p class="font-medium text-gray-900">TikTok</p>
+                                                <p class="text-sm text-gray-600">32 posts this month</p>
+                                            </div>
+                                        </div>
+                                        <div class="text-right">
+                                            <p class="text-lg font-semibold text-gray-900">€567</p>
+                                            <p class="text-sm text-green-600">+8% vs last month</p>
+                                        </div>
+                                    </div>
+
+                                    <div class="flex items-center justify-between p-4 bg-red-50 rounded-lg border border-red-200">
+                                        <div class="flex items-center space-x-3">
+                                            <i class="fab fa-youtube text-red-600 text-xl"></i>
+                                            <div>
+                                                <p class="font-medium text-gray-900">YouTube</p>
+                                                <p class="text-sm text-gray-600">28 posts this month</p>
+                                            </div>
+                                        </div>
+                                        <div class="text-right">
+                                            <p class="text-lg font-semibold text-gray-900">€416</p>
+                                            <p class="text-sm text-green-600">+22% vs last month</p>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <!-- @END_COMPONENT: ReportsView -->
+        </main>
+        <!-- @END_COMPONENT: MainContent -->
+    </div>
+    <!-- @END_COMPONENT: AppLayout -->
+
+    <script>
+        // TODO: Implement business logic, API calls, and state management
+        
+        (function() {
+            // Navigation handling
+            const navItems = document.querySelectorAll('[data-nav-item]');
+            const views = {
+                'dashboard': document.getElementById('dashboard-view'),
+                'assets': document.getElementById('assets-view'),
+                'composer': document.getElementById('composer-view'),
+                'scheduler': document.getElementById('scheduler-view'),
+                'runs': document.getElementById('runs-view'),
+                'reports': document.getElementById('reports-view')
+            };
+
+            function showView(viewName) {
+                // Hide all views
+                Object.values(views).forEach(view => {
+                    if (view) view.classList.add('hidden');
+                });
+                
+                // Show selected view
+                if (views[viewName]) {
+                    views[viewName].classList.remove('hidden');
+                }
+
+                // Update navigation
+                navItems.forEach(item => {
+                    item.classList.remove('text-primary-600', 'bg-primary-50', 'font-medium');
+                    item.classList.add('text-gray-700');
+                });
+
+                const activeNav = document.querySelector(`[data-nav-item="${viewName}"]`);
+                if (activeNav) {
+                    activeNav.classList.remove('text-gray-700');
+                    activeNav.classList.add('text-primary-600', 'bg-primary-50', 'font-medium');
+                }
+
+                // Update page title
+                const titleMap = {
+                    'dashboard': 'Dashboard',
+                    'assets': 'Assets',
+                    'composer': 'Content Composer',
+                    'scheduler': 'Job Scheduler',
+                    'runs': 'Job Execution History',
+                    'reports': 'Reports & Analytics'
+                };
+
+                const descriptionMap = {
+                    'dashboard': 'Monitor your content pipeline performance',
+                    'assets': 'Manage your content assets and transformations',
+                    'composer': 'Edit and queue posts for publishing',
+                    'scheduler': 'Configure and trigger automated jobs',
+                    'runs': 'View execution logs and job history',
+                    'reports': 'Analyze performance and revenue metrics'
+                };
+
+                const titleEl = document.querySelector('[data-bind="currentPageTitle"]');
+                const descEl = document.querySelector('[data-bind="currentPageDescription"]');
+                
+                if (titleEl) titleEl.textContent = titleMap[viewName];
+                if (descEl) descEl.textContent = descriptionMap[viewName];
+            }
+
+            // Add click handlers to navigation
+            navItems.forEach(item => {
+                item.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    const viewName = item.getAttribute('data-nav-item');
+                    showView(viewName);
+                    
+                    // Update URL without page reload
+                    history.pushState({view: viewName}, '', `#${viewName}`);
+                });
+            });
+
+            // Handle browser back/forward
+            window.addEventListener('popstate', (e) => {
+                const viewName = e.state?.view || 'dashboard';
+                showView(viewName);
+            });
+
+            // Initialize based on URL hash
+            const initialView = window.location.hash.slice(1) || 'dashboard';
+            showView(initialView);
+
+            // Mock revenue calculation for demo
+            const revenueInputs = document.querySelectorAll('input[name="views"], input[name="ctr"], input[name="epc"]');
+            revenueInputs.forEach(input => {
+                input.addEventListener('input', () => {
+                    const views = parseFloat(document.querySelector('input[name="views"]').value) || 0;
+                    const ctr = parseFloat(document.querySelector('input[name="ctr"]').value) || 0;
+                    const epc = parseFloat(document.querySelector('input[name="epc"]').value) || 0;
+                    
+                    const monthlyClicks = Math.round(views * (ctr / 100));
+                    const monthlyRevenue = monthlyClicks * epc;
+                    const dailyRevenue = monthlyRevenue / 30;
+                    const weeklyRevenue = monthlyRevenue / 4.33;
+                    const annualRevenue = monthlyRevenue * 12;
+                    const rpmRevenue = (monthlyRevenue / views) * 1000;
+
+                    // Update display values
+                    document.querySelector('[data-bind="calculated.monthlyRevenue"]').textContent = `€${monthlyRevenue.toLocaleString('en-US', {minimumFractionDigits: 0, maximumFractionDigits: 0})}`;
+                    document.querySelector('[data-bind="calculated.monthlyClicks"]').textContent = monthlyClicks.toLocaleString();
+                    document.querySelector('[data-bind="calculated.annualRevenue"]').textContent = `€${annualRevenue.toLocaleString('en-US', {minimumFractionDigits: 0, maximumFractionDigits: 0})}`;
+                    document.querySelector('[data-bind="calculated.dailyRevenue"]').textContent = `€${dailyRevenue.toFixed(2)}`;
+                    document.querySelector('[data-bind="calculated.weeklyRevenue"]').textContent = `€${weeklyRevenue.toFixed(2)}`;
+                    document.querySelector('[data-bind="calculated.rpmRevenue"]').textContent = `€${rpmRevenue.toFixed(2)}`;
+                });
+            });
+
+            // Trigger initial calculation
+            if (revenueInputs.length > 0) {
+                revenueInputs[0].dispatchEvent(new Event('input'));
+            }
+        })();
+    </script>
+</body>
+</html>

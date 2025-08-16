@@ -1,0 +1,178 @@
+🚦 Smoke test (local/Replit)
+# health
+curl -sS https://<ton-repl>.repl.co/healthz
+
+# cycle manuel
+curl -XPOST https://<ton-repl>.repl.co/jobs/ingest
+curl -XPOST https://<ton-repl>.repl.co/jobs/transform
+curl -XPOST https://<ton-repl>.repl.co/jobs/publish
+
+
+UI: / (dashboard), /assets, /composer, /scheduler, /runs, /reports, /accounts.
+
+🔐 .env minimal (prod light)
+# DB (upgrade Neon conseillé)
+DATABASE_URL=postgresql+psycopg://USER:PASS@HOST/db?sslmode=require
+# S3 (R2/B2)
+S3_ENDPOINT=https://<r2-or-b2>
+S3_BUCKET=contentflow
+S3_ACCESS_KEY=...
+S3_SECRET_KEY=...
+S3_REGION=auto
+
+APP_BASE_URL=https://<ton-repl>.repl.co
+JWT_SECRET=change_me
+
+# YouTube
+YOUTUBE_CLIENT_ID=...
+YOUTUBE_CLIENT_SECRET=...
+YOUTUBE_REDIRECT_URL=${APP_BASE_URL}/oauth/youtube/callback
+YOUTUBE_SCOPES=https://www.googleapis.com/auth/youtube.upload
+
+# Reddit
+REDDIT_CLIENT_ID=...
+REDDIT_CLIENT_SECRET=...
+REDDIT_REDIRECT_URL=${APP_BASE_URL}/oauth/reddit/callback
+REDDIT_USER_AGENT=contentflow/1.0 by benji
+REDDIT_DEFAULT_SUB=videos
+
+# Pinterest
+PINTEREST_CLIENT_ID=...
+PINTEREST_CLIENT_SECRET=...
+PINTEREST_REDIRECT_URL=${APP_BASE_URL}/oauth/pinterest/callback
+PINTEREST_BOARD_ID=<board_id>
+
+# (Optionnels / stubs prêts)
+IG_APP_ID= IG_APP_SECRET= IG_REDIRECT_URL=${APP_BASE_URL}/oauth/instagram/callback
+IG_PAGE_ID= IG_IG_USER_ID=
+TIKTOK_CLIENT_KEY= TIKTOK_CLIENT_SECRET= TIKTOK_REDIRECT_URL=${APP_BASE_URL}/oauth/tiktok/callback
+
+# Affiliation
+AFFIL_BASE_URL=https://ton-affilié.tld/landing
+AFFIL_DEFAULT_UTM=utm_source={platform}&utm_content={post_id}
+
+🔗 OAuth – branchement express
+
+YouTube (Shorts)
+
+Google Cloud → OAuth client Web → autorised redirect = ${APP_BASE_URL}/oauth/youtube/callback
+
+UI: /accounts → “Connecter YouTube” → consent → done.
+
+Smoke: publie un MP4 < 60s pour être taggé “Short”.
+
+Reddit
+
+reddit.com/prefs/apps → “web app” → redirect ${APP_BASE_URL}/oauth/reddit/callback
+
+UI: /accounts → connect.
+
+Tips: commence par un sub permissif; set REDDIT_DEFAULT_SUB.
+
+Pinterest
+
+Dev app + token v5 → /accounts → connect.
+
+Note: si upload renvoie 415 / TUS required, switchera en TUS plus tard (OK pour MVP).
+
+Instagram / TikTok
+
+Graph/TikTok = accès approuvé (souvent long). Tant que pas validé → stubs (pas de plantage, juste “non connecté”).
+
+🧲 Ingestion (prod hygiene)
+
+Sources: /sources → RSS/YouTube-CC/Stock.
+
+Filtres: keywords CSV, min_duration, lang.
+
+Dédup: pHash (distance ≤ 5 => skip).
+
+Watch: scheduler tourne toutes 30 min (modifiable dans services/scheduler.py).
+
+🎞️ Transform / FFmpeg
+
+Recipes 9:16, 1080×1920, 30fps, faststart.
+
+Overlays: HOOK (0–5s), CTA (20–28s), watermark attribution (obligatoire).
+
+SRT optionnel (pas de Whisper local en Replit: either texte→SRT ou API externe).
+
+Output → S3 (fallback local si S3 non set).
+
+🧠 Planner + A/B + Bandit
+
+Planner heuristique → quality_score & hashtags.
+
+Composer: génère A/B titres/descriptions (2 variantes).
+
+Bandit (Thompson) choisit {platform,lang,hook}; reward = clics (shortlink).
+
+Gate: autopost uniquement si risk < 0.2 ET quality ≥ 0.7.
+
+📤 Publishing
+
+YT/Reddit/Pinterest: réels (si comptes connectés).
+
+IG/TikTok: stubs “non connecté” tant que pas d’accès API.
+
+Backoff + retry (Job.attempts++), log dans /runs.
+
+💰 Tracking & revenus
+
+Shortlink /l/{hash} → redirige vers AFFIL_BASE_URL + UTM + log MetricEvent(click).
+
+/reports : simulateur € (views × ctr × epc) + export CSV.
+
+KPI journaliers: Views, CTR, EPC, Revenue, par plateforme.
+
+🚀 Autopilot – on/off
+
+Flag (Rule/boolean) dans dashboard.
+
+Cron par défaut:
+
+ingest: 30m
+
+transform: 30m
+
+publish: 20m
+
+metrics: 6h
+
+autopilot tick: 10m
+
+Concurrence soft: 1–2 jobs simultanés sur Replit (évite throttling).
+
+🧯 Runbook pannes (rapide)
+
+OAuth “redirect_mismatch” → vérifie ${APP_BASE_URL} et callback exact.
+
+Pinterest 415 → OK pour MVP; passera en TUS quand tu veux.
+
+Quota YT 403 → ralentis cadence; Shorts < 60s.
+
+FFmpeg fail → check logs /runs, essaye d’abord le clip noir (3s) de démo.
+
+DB locked (SQLite) → passe Neon Postgres (fortement recommandé).
+
+🧪 E2E test (sans creds réels)
+
+/jobs/ingest → 1+ Asset.new avec keywords.
+
+/jobs/transform → MP4 vertical demo + Asset.ready + Post.queued.
+
+/composer → set platform=youtube (ou autre) + Créer A/B.
+
+/jobs/publish → “posted” (si compte connecté) ou “failed non connecté” (stub).
+
+/l/{hash} → redirige + MetricEvent(click) visible dans /reports.
+
+🔒 Hygiene anti-ban (rappel)
+
+CC-BY/stock only, attribution visible.
+
+#ad si affiliation.
+
+Rate-limit + jitter, variation titres/descr.
+
+Pas de scraping “sale”.

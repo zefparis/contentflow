@@ -1,0 +1,211 @@
+But: upgrader ContentFlow pour la prod :
+
+Observabilité & fiabilité (idempotence, DLQ, retry backoff)
+
+Ingestion métriques “réelles” (YT/Reddit/Pinterest) + estimations Instagram/TikTok
+
+Boucle fermée Bandit (auto-update post metrics)
+
+Shortlink robuste (EPC par lien, revenue journalier)
+
+Jobs de maintenance (retention S3/DB, compaction, watchdog)
+
+Kill-switch & feature flags (UI)
+
+Génère/édite les fichiers listés avec code concret minimal (pas de TODO). Le serveur doit boot et les jobs tourner sans creds (fallback safe).
+
+0) Deps & ENV (append)
+
+requirements.txt (ajouter)
+
+prometheus-client==0.20.0
+tenacity==9.0.0
+filelock==3.15.4
+
+
+.env.example (ajouter)
+
+# Feature flags
+FEATURE_AUTOPILOT=true
+FEATURE_REAL_PUBLISH=false
+FEATURE_REAL_ANALYTICS=false
+
+# Rate limits (par plateforme)
+RL_YOUTUBE_PMIN=3
+RL_REDDIT_PMIN=2
+RL_PINTEREST_PMIN=2
+
+# EPC par défaut si l’affilié ne remonte pas le revenu
+DEFAULT_EPC_EUR=0.20
+
+1) Observabilité
+
+app/routes/health.py (append)
+
+Exposer /metrics Prometheus (process + counters métiers).
+
+Incrémenter: cf_jobs_total{kind}, cf_posts_published_total{platform}, cf_clicks_total{platform}.
+
+app/utils/logger.py (append)
+
+Logger JSON avec request_id (header ou généré), job_id, post_id.
+
+2) Fiabilité jobs (idempotence, retry, DLQ)
+
+Nouveau app/utils/jobs.py :
+
+with_job(db, kind, payload) -> job_id (création + context manager pour status running/done/failed).
+
+idempotency_key(payload) (hash stable); si déjà “done” → skip.
+
+retry(fn) décoré avec tenacity (exponential backoff, max attempts depuis .env).
+
+dead_letter(job) : place job en DLQ (table Job, status=failed, reason).
+
+app/services/scheduler.py (patch)
+
+Tous les job_* passent par with_job + retry.
+
+Concurrence: verrous avec filelock (clé par job kind).
+
+Backoff si quota rate-limit atteint (utilise RL_* env).
+
+3) Shortlink v2 (revenue + EPC)
+
+app/models.py (append champs)
+
+Link: id, affiliate_url, utm, platform_hint, epc_override_eur (nullable)
+
+MetricEvent: ajouter session_id (str) & amount_eur (float, default 0).
+
+app/routes/ui.py (append page)
+
+/links : CRUD simple; champ EPC override.
+
+app/routes/redirect.py (nouveau)
+
+GET /l/{hash} :
+
+Résout Link + construit URL finale (UTM + post_id + platform).
+
+Écrit MetricEvent(kind="click", platform, post_id, session_id cookie)
+
+Si amount_eur absent (pas d’API affilié), estimé = EPC(Link).
+
+Redirige 302.
+
+utils/metrics.py (append)
+
+epc_for_link(link): link.epc_override_eur or DEFAULT_EPC_EUR
+
+compute_daily_revenue(db, day) : somme amount_eur ou epc * clicks.
+
+4) Analytics “réelles” (polling safe)
+
+app/services/analytics_pull.py (nouveau)
+Fonctions idempotentes (utilisent post.platform_id):
+
+pull_youtube_stats(post) : views, likes, comments via Data API v3 videos.list.
+
+pull_reddit_stats(post) : score, upvote_ratio, comments via PRAW.
+
+pull_pinterest_stats(post) : v5 pins insights (fallback: None si pas de token).
+
+pull_instagram_stats(post) : stub (si token absent → None, sinon placeholder champs).
+
+pull_tiktok_stats(post) : stub idem.
+Chaque “pull_*” écrit des MetricEvent + met Post.metrics_json.
+
+services/scheduler.py (append)
+
+job_metrics() : parcourt les posts posted des 7 derniers jours, appelle pull_* selon plateforme, respecte RL.
+
+5) Bandit – boucle fermée
+
+utils/bandit.py (patch)
+
+update_from_metrics(db) :
+
+Pour chaque arm ({platform,lang,hook_id}), calcule reward = clicks / impressions (ou proxy views).
+
+Met à jour α/β (Beta) persistés en DB (via Rule key bandit_state).
+
+Scheduler : après job_metrics(), appeler update_from_metrics.
+
+6) Compliance – règles dynamiques
+
+app/services/compliance.py (patch)
+
+Charger denylist depuis Rule(key="denylist_keywords") (JSON array)
+
+Si match titre/desc/hashtags → risk += 0.2
+
+UI /rules : CRUD simple (JSON textarea).
+
+7) Kill-switch & feature flags
+
+app/routes/ui.py (append)
+
+/flags : toggles FEATURE_AUTOPILOT, FEATURE_REAL_PUBLISH, FEATURE_REAL_ANALYTICS.
+
+En runtime, les jobs respectent ces flags (ex: publish réel bloqué si false → stub/log uniquement).
+
+8) Maintenance & coûts
+
+app/services/maintenance.py (nouveau)
+
+job_retention() :
+
+Supprime Assets “failed” > 7j, purge Run logs > 30j.
+
+Lifecycle S3: si objet > 30j et status=posted, déplacer vers classe “infrequent access” (simuler par tag si pas d’API).
+
+job_watchdog() :
+
+Scan jobs “running” > X min → marquer “failed” + DLQ.
+
+Scheduler :
+
+job_retention daily 03:00, job_watchdog every 10 min.
+
+9) UI – petites retouches
+
+templates/base.html (nav)
+
+Ajouter liens: Flags, Links, Rules.
+
+templates/reports.html (append)
+
+Tableau revenus par jour/plateforme (agrège MetricEvent).
+
+Badge “EPC effectif” (revenu/clic).
+
+10) Acceptance (doit passer sans creds)
+
+/metrics expose des compteurs Prometheus.
+
+/flags permet ON/OFF Autopilot/publish/analytics.
+
+/links crée un lien avec epc_override_eur, /l/{hash} incrémente click et crédite revenu estimé.
+
+job_metrics() n’explose pas sans tokens → écrit 0 et continue.
+
+update_from_metrics() met à jour l’état du bandit (persisté).
+
+DLQ visible dans /runs (jobs failed avec raison).
+
+job_retention() purge sans casser les FK.
+
+Génère/édite maintenant les fichiers ci-dessus avec code compact, qui boot immédiatement, et dont les jobs tournent avec fallback safe.
+
+✅ Post-prompt: check-list d’exploit (résumé)
+
+Flags: commence FEATURE_REAL_PUBLISH=false, FEATURE_REAL_ANALYTICS=false. Quand les comptes sont connectés → passe à true.
+
+EPC: si ton affilié ne donne pas d’API conversion, renseigne epc_override par lien.
+
+Quotas: ajuste RL_* si 429/403.
+
+On-call: si watchdog trouve des jobs “bloqués” → DLQ; requeue depuis /runs.
+
+Coûts: active retention (S3 & DB) dès J+7.

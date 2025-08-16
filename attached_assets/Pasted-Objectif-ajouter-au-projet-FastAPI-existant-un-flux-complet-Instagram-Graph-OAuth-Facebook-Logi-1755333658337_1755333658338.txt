@@ -1,0 +1,305 @@
+Objectif : ajouter au projet FastAPI existant un flux complet Instagram Graph :
+
+OAuth Facebook Login → user access token → long-lived
+
+Sélection d’une Page → récupération IG User ID
+
+Upload Reels : create container → poll status → publish
+
+Stockage tokens en DB (table accounts) + refresh job
+
+UI Comptes minimal + routes /ig/
+
+Fallback safe quand env absent (pas de crash)
+
+0) Déps & ENV
+requirements.txt (append)
+httpx==0.27.0
+itsdangerous==2.2.0
+
+.env.example (append)
+# Meta / Instagram Graph
+META_APP_ID=
+META_APP_SECRET=
+META_REDIRECT_URL=https://<ton-repl>.repl.co/ig/oauth/callback
+META_GRAPH_VERSION=v21.0
+META_SCOPES=pages_show_list,pages_read_engagement,instagram_basic,instagram_content_publish
+
+app/config.py (append)
+class Settings(BaseSettings):
+    META_APP_ID: str = ""
+    META_APP_SECRET: str = ""
+    META_REDIRECT_URL: str = ""
+    META_GRAPH_VERSION: str = "v21.0"
+    META_SCOPES: str = "pages_show_list,pages_read_engagement,instagram_basic,instagram_content_publish"
+    @property
+    def META_BASE(self) -> str:
+        return f"https://graph.facebook.com/{self.META_GRAPH_VERSION}"
+
+1) Modèle DB (si pas déjà présent)
+app/models.py (append, réutilise ta table Account)
+# Account(platform='meta_ig')
+class Account(Base):
+    __tablename__ = "accounts"
+    id = sa.Column(sa.String, primary_key=True, default=lambda: str(uuid4()))
+    platform = sa.Column(sa.String, index=True)  # 'meta_ig', ...
+    oauth_json = sa.Column(sa.Text, nullable=False, default="{}")  # tokens & meta
+    enabled = sa.Column(sa.Boolean, default=False)
+    created_at = sa.Column(sa.DateTime(timezone=True), server_default=sa.func.now())
+
+
+(si tu l’as déjà, garde — on stockera dans oauth_json : user_token, user_token_expires_at, page_id, page_token, ig_user_id)
+
+2) Provider Meta (OAuth + Graph helpers)
+app/providers/meta_client.py (nouveau)
+import time, json, httpx, urllib.parse
+from app.config import settings
+
+BASE = lambda: settings.META_BASE
+
+def oauth_start_url(state: str) -> str:
+    qs = urllib.parse.urlencode({
+        "client_id": settings.META_APP_ID,
+        "redirect_uri": settings.META_REDIRECT_URL,
+        "response_type": "code",
+        "scope": settings.META_SCOPES
+    })
+    return f"https://www.facebook.com/{settings.META_GRAPH_VERSION}/dialog/oauth?{qs}&state={state}"
+
+def oauth_exchange_code(code: str) -> dict:
+    params = {
+        "client_id": settings.META_APP_ID,
+        "client_secret": settings.META_APP_SECRET,
+        "redirect_uri": settings.META_REDIRECT_URL,
+        "code": code
+    }
+    r = httpx.get(f"{BASE()}/oauth/access_token", params=params, timeout=30)
+    r.raise_for_status(); data = r.json()
+    # { access_token, token_type, expires_in }
+    data["obtained_at"] = int(time.time())
+    data["expires_at"] = data["obtained_at"] + int(data.get("expires_in", 0))
+    return data
+
+def oauth_extend_long_lived(user_token: str) -> dict:
+    params = {
+        "grant_type": "fb_exchange_token",
+        "client_id": settings.META_APP_ID,
+        "client_secret": settings.META_APP_SECRET,
+        "fb_exchange_token": user_token
+    }
+    r = httpx.get(f"{BASE()}/oauth/access_token", params=params, timeout=30)
+    r.raise_for_status(); data = r.json()
+    data["obtained_at"] = int(time.time())
+    data["expires_at"] = data["obtained_at"] + int(data.get("expires_in", 0))
+    return data
+
+def list_pages(user_token: str) -> list[dict]:
+    r = httpx.get(f"{BASE()}/me/accounts", params={"access_token": user_token}, timeout=30)
+    r.raise_for_status()
+    return r.json().get("data", [])
+
+def get_ig_user_id(page_id: str, page_token: str) -> str | None:
+    r = httpx.get(f"{BASE()}/{page_id}", params={"fields":"instagram_business_account","access_token": page_token}, timeout=30)
+    r.raise_for_status()
+    iga = r.json().get("instagram_business_account")
+    return iga.get("id") if iga else None
+
+# ---- Publish Reels ----
+def ig_create_media(ig_user_id: str, page_token: str, video_url: str, caption: str, share_to_feed: bool=True) -> dict:
+    params = {
+        "media_type": "REELS",
+        "video_url": video_url,
+        "caption": caption or "",
+        "share_to_feed": "true" if share_to_feed else "false",
+        "access_token": page_token
+    }
+    r = httpx.post(f"{BASE()}/{ig_user_id}/media", data=params, timeout=90)
+    try:
+        r.raise_for_status(); return {"ok": True, **r.json()}  # id = creation_id
+    except httpx.HTTPStatusError:
+        return {"ok": False, "status": r.status_code, "error": r.text}
+
+def ig_check_creation(creation_id: str, page_token: str) -> dict:
+    r = httpx.get(f"{BASE()}/{creation_id}", params={"fields":"status_code,status","access_token": page_token}, timeout=30)
+    r.raise_for_status()
+    return r.json()  # status_code: IN_PROGRESS|FINISHED|ERROR
+
+def ig_publish_media(ig_user_id: str, page_token: str, creation_id: str) -> dict:
+    params = {"creation_id": creation_id, "access_token": page_token}
+    r = httpx.post(f"{BASE()}/{ig_user_id}/media_publish", data=params, timeout=60)
+    try:
+        r.raise_for_status(); return {"ok": True, **r.json()}  # id = media_id
+    except httpx.HTTPStatusError:
+        return {"ok": False, "status": r.status_code, "error": r.text}
+
+3) Routes OAuth + Comptes
+app/routes/ig_oauth.py (nouveau)
+import json, time, secrets
+from fastapi import APIRouter, Request, Depends, Query
+from fastapi.responses import RedirectResponse, HTMLResponse, JSONResponse
+from app.db import get_session
+from app.models import Account
+from app.providers.meta_client import oauth_start_url, oauth_exchange_code, oauth_extend_long_lived, list_pages, get_ig_user_id
+
+router = APIRouter(prefix="/ig/oauth", tags=["instagram_oauth"])
+
+@router.get("/start")
+def ig_oauth_start():
+    state = secrets.token_urlsafe(16)
+    return RedirectResponse(oauth_start_url(state))
+
+@router.get("/callback")
+def ig_oauth_callback(code: str = Query(...), db=Depends(get_session)):
+    short = oauth_exchange_code(code)                # user token court
+    longl = oauth_extend_long_lived(short["access_token"])  # long-lived user token
+    user_token = longl["access_token"]; exp = longl.get("expires_at")
+
+    pages = list_pages(user_token)                   # [{id,page,access_token}]
+    if not pages:
+        return HTMLResponse("<h3>Pas de Page Facebook liée.</h3>", status_code=400)
+    # on prend la 1ère page par défaut (UI de sélection simple à faire si besoin)
+    page = pages[0]; page_id = page["id"]; page_token = page["access_token"]
+
+    ig_id = get_ig_user_id(page_id, page_token)
+    if not ig_id:
+        return HTMLResponse("<h3>Aucun compte Instagram Pro lié à cette Page.</h3>", status_code=400)
+
+    acc = db.query(Account).filter_by(platform="meta_ig").first()
+    if not acc:
+        from uuid import uuid4
+        acc = Account(id=str(uuid4()), platform="meta_ig", enabled=True)
+        db.add(acc)
+    payload = {
+        "user_token": user_token,
+        "user_token_expires_at": exp,
+        "page_id": page_id,
+        "page_token": page_token,
+        "ig_user_id": ig_id,
+        "updated_at": int(time.time())
+    }
+    acc.oauth_json = json.dumps(payload)
+    acc.enabled = True
+    db.commit()
+    return HTMLResponse("<h3>Instagram connecté ✅</h3><a href='/accounts'>Retour</a>")
+
+4) Route Publish (polling robuste)
+app/routes/ig_publish.py (nouveau)
+import json, time
+from fastapi import APIRouter, Body, Depends
+from fastapi.responses import JSONResponse
+from app.db import get_session
+from app.models import Account
+from app.providers.meta_client import ig_create_media, ig_check_creation, ig_publish_media
+
+router = APIRouter(prefix="/ig", tags=["instagram"])
+
+def _get_meta_account(db):
+    acc = db.query(Account).filter_by(platform="meta_ig", enabled=True).first()
+    if not acc: return None, None, None
+    meta = json.loads(acc.oauth_json or "{}")
+    return meta.get("ig_user_id"), meta.get("page_token"), meta
+
+@router.post("/reels/publish")
+def reels_publish(payload: dict = Body(...), db=Depends(get_session)):
+    """
+    payload: { "video_url": "...", "caption": "text", "share_to_feed": true }
+    """
+    ig_user_id, page_token, meta = _get_meta_account(db)
+    if not ig_user_id or not page_token:
+        return JSONResponse({"ok": False, "error": "meta_ig_not_connected"}, status_code=400)
+
+    video_url = payload.get("video_url"); caption = payload.get("caption",""); stf = bool(payload.get("share_to_feed", True))
+    step1 = ig_create_media(ig_user_id, page_token, video_url, caption, stf)
+    if not step1.get("ok"):
+        return JSONResponse(step1, status_code=400)
+    creation_id = step1.get("id")
+
+    # polling statut container
+    deadline = time.time() + 180  # 3 minutes
+    status_code = "IN_PROGRESS"
+    while time.time() < deadline:
+        s = ig_check_creation(creation_id, page_token)
+        status_code = (s.get("status_code") or s.get("status") or "IN_PROGRESS")
+        if status_code == "FINISHED": break
+        if status_code == "ERROR":
+            return JSONResponse({"ok": False, "creation_id": creation_id, "status": s}, status_code=400)
+        time.sleep(3)
+
+    if status_code != "FINISHED":
+        return JSONResponse({"ok": False, "creation_id": creation_id, "status": status_code, "error":"timeout"}, status_code=504)
+
+    step2 = ig_publish_media(ig_user_id, page_token, creation_id)
+    if not step2.get("ok"):
+        return JSONResponse({"ok": False, "creation_id": creation_id, **step2}, status_code=400)
+
+    return {"ok": True, "creation_id": creation_id, "media_id": step2.get("id")}
+
+5) UI Comptes (ajout bouton)
+app/templates/accounts.html (append le bouton)
+<!-- ajouter dans la section comptes -->
+<a class="btn" href="/ig/oauth/start">Connecter Instagram (Meta)</a>
+
+
+(ou dans base.html navbar, un lien “Connecter Instagram”)
+
+6) Scheduler : refresh token (préventif)
+app/services/scheduler.py (append)
+import json, time, datetime as dt
+from apscheduler.triggers.cron import CronTrigger
+from app.db import SessionLocal
+from app.models import Account
+from app.providers.meta_client import oauth_extend_long_lived
+
+def job_meta_token_refresh():
+    db = SessionLocal()
+    acc = db.query(Account).filter_by(platform="meta_ig", enabled=True).first()
+    if not acc: return
+    meta = json.loads(acc.oauth_json or "{}")
+    exp = int(meta.get("user_token_expires_at") or 0)
+    # si expire dans < 15 jours, on tente un refresh
+    if exp and (exp - int(time.time()) < 15*24*3600):
+        try:
+            res = oauth_extend_long_lived(meta["user_token"])
+            meta["user_token"] = res["access_token"]
+            meta["user_token_expires_at"] = res.get("expires_at")
+            acc.oauth_json = json.dumps(meta)
+            db.commit()
+        except Exception:
+            pass
+
+def setup_jobs(sched):
+    # ... tes add_job existants
+    sched.add_job(job_meta_token_refresh, CronTrigger(hour=3, minute=15))
+
+7) Montage des routes FastAPI
+app/main.py (append)
+from app.routes import ig_oauth as ig_oauth_routes
+from app.routes import ig_publish as ig_publish_routes
+app.include_router(ig_oauth_routes.router)
+app.include_router(ig_publish_routes.router)
+
+8) Acceptation (doit passer)
+
+Sans META_APP_* → /ig/reels/publish ⇒ {ok:false, error:"meta_ig_not_connected"} (pas de crash).
+
+Avec OAuth validé :
+
+/ig/oauth/start → login → callback stocke user_token(long-lived), page_id, page_token, ig_user_id.
+
+POST /ig/reels/publish {"video_url":"https://.../out.mp4","caption":"#ad test"}
+
+Polling jusqu’à FINISHED → media_publish → {ok:true, media_id:"..."}.
+
+Scheduler ajoute job_meta_token_refresh (03:15) et n’explose pas.
+
+9) Garde-fous (anti-ban, indispensables)
+
+Compliance gate déjà en place : refuse auto-post si risk>=0.2 ou licence inconnue.
+
+Rate-limit côté scheduler (1–2 uploads en parallèle max).
+
+Idempotence : si même video_url déjà envoyée → skip (hash/meta).
+
+Attribution + #ad si lien affilié dans la légende.
+
+Aucun contournement des permissions/Review Meta : si l’app n’a pas instagram_content_publish approuvé, ne publie pas en prod.

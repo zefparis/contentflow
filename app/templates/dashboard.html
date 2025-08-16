@@ -1,0 +1,158 @@
+{% extends "base.html" %}
+
+{% block page_title %}Dashboard{% endblock %}
+{% block page_description %}Monitor your content pipeline performance{% endblock %}
+
+{% block content %}
+<!-- KPI Cards -->
+<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+    <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+        <div class="flex items-center justify-between">
+            <div>
+                <p class="text-sm font-medium text-gray-600">New Assets</p>
+                <p class="text-3xl font-bold text-gray-900 mt-2">{{ assets_new }}</p>
+                <p class="text-sm text-green-600 mt-1">Ready for processing</p>
+            </div>
+            <div class="w-12 h-12 bg-blue-100 rounded-lg flex items-center justify-center">
+                <i class="fas fa-file-video text-blue-600"></i>
+            </div>
+        </div>
+    </div>
+
+    <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+        <div class="flex items-center justify-between">
+            <div>
+                <p class="text-sm font-medium text-gray-600">Ready Assets</p>
+                <p class="text-3xl font-bold text-gray-900 mt-2">{{ assets_ready }}</p>
+                <p class="text-sm text-green-600 mt-1">Processed & available</p>
+            </div>
+            <div class="w-12 h-12 bg-green-100 rounded-lg flex items-center justify-center">
+                <i class="fas fa-check-circle text-green-600"></i>
+            </div>
+        </div>
+    </div>
+
+    <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+        <div class="flex items-center justify-between">
+            <div>
+                <p class="text-sm font-medium text-gray-600">Queued Posts</p>
+                <p class="text-3xl font-bold text-gray-900 mt-2">{{ posts_queued }}</p>
+                <p class="text-sm text-amber-600 mt-1">Awaiting publication</p>
+            </div>
+            <div class="w-12 h-12 bg-amber-100 rounded-lg flex items-center justify-center">
+                <i class="fas fa-clock text-amber-600"></i>
+            </div>
+        </div>
+    </div>
+
+    <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+        <div class="flex items-center justify-between">
+            <div>
+                <p class="text-sm font-medium text-gray-600">Published Posts</p>
+                <p class="text-3xl font-bold text-gray-900 mt-2">{{ posts_published }}</p>
+                <p class="text-sm text-green-600 mt-1">Successfully published</p>
+            </div>
+            <div class="w-12 h-12 bg-purple-100 rounded-lg flex items-center justify-center">
+                <i class="fas fa-share-alt text-purple-600"></i>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Recent Activity & Pipeline Status -->
+<div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+    <!-- Recent Jobs -->
+    <div class="bg-white rounded-xl shadow-sm border border-gray-200">
+        <div class="p-6 border-b border-gray-200">
+            <div class="flex items-center justify-between">
+                <h3 class="text-lg font-semibold text-gray-900">Recent Jobs</h3>
+                <a href="/runs" class="text-sm text-primary-600 hover:text-primary-700">View all</a>
+            </div>
+        </div>
+        <div class="p-6">
+            {% for run in recent_runs[:5] %}
+            <div class="flex items-center justify-between py-3 border-b border-gray-100 last:border-0">
+                <div class="flex items-center space-x-3">
+                    <div class="w-8 h-8 {% if run.kind == 'ingest' %}bg-blue-100{% elif run.kind == 'transform' %}bg-green-100{% else %}bg-purple-100{% endif %} rounded-full flex items-center justify-center">
+                        <i class="fas {% if run.kind == 'ingest' %}fa-download text-blue-600{% elif run.kind == 'transform' %}fa-cog text-green-600{% else %}fa-share text-purple-600{% endif %} text-xs"></i>
+                    </div>
+                    <div>
+                        <p class="font-medium text-gray-900">{{ run.kind|title }} Job</p>
+                        <p class="text-sm text-gray-500">{{ run.created_at.strftime('%H:%M') }}</p>
+                    </div>
+                </div>
+                <span class="px-2 py-1 {% if run.status == 'completed' %}bg-green-100 text-green-800{% elif run.status == 'running' %}bg-blue-100 text-blue-800{% else %}bg-red-100 text-red-800{% endif %} rounded-full text-xs font-medium">
+                    {{ run.status|title }}
+                </span>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+
+    <!-- Pipeline Flow -->
+    <div class="bg-white rounded-xl shadow-sm border border-gray-200">
+        <div class="p-6 border-b border-gray-200">
+            <h3 class="text-lg font-semibold text-gray-900">Pipeline Flow</h3>
+        </div>
+        <div class="p-6">
+            <div class="space-y-4">
+                <div class="flex items-center justify-between">
+                    <div class="flex items-center space-x-3">
+                        <div class="w-10 h-10 bg-blue-600 rounded-lg flex items-center justify-center">
+                            <i class="fas fa-download text-white"></i>
+                        </div>
+                        <div>
+                            <p class="font-medium text-gray-900">Ingest</p>
+                            <p class="text-sm text-gray-500">RSS & YouTube sources</p>
+                        </div>
+                    </div>
+                    <div class="text-right">
+                        <p class="text-sm font-medium text-gray-900">{{ assets_new }} assets</p>
+                        <p class="text-xs text-gray-500">Auto: 30min</p>
+                    </div>
+                </div>
+
+                <div class="flex justify-center">
+                    <i class="fas fa-arrow-down text-gray-400"></i>
+                </div>
+
+                <div class="flex items-center justify-between">
+                    <div class="flex items-center space-x-3">
+                        <div class="w-10 h-10 bg-green-600 rounded-lg flex items-center justify-center">
+                            <i class="fas fa-cog text-white"></i>
+                        </div>
+                        <div>
+                            <p class="font-medium text-gray-900">Transform</p>
+                            <p class="text-sm text-gray-500">FFmpeg processing</p>
+                        </div>
+                    </div>
+                    <div class="text-right">
+                        <p class="text-sm font-medium text-gray-900">{{ assets_ready }} ready</p>
+                        <p class="text-xs text-gray-500">Auto: 30min</p>
+                    </div>
+                </div>
+
+                <div class="flex justify-center">
+                    <i class="fas fa-arrow-down text-gray-400"></i>
+                </div>
+
+                <div class="flex items-center justify-between">
+                    <div class="flex items-center space-x-3">
+                        <div class="w-10 h-10 bg-purple-600 rounded-lg flex items-center justify-center">
+                            <i class="fas fa-share-alt text-white"></i>
+                        </div>
+                        <div>
+                            <p class="font-medium text-gray-900">Publish</p>
+                            <p class="text-sm text-gray-500">Multi-platform distribution</p>
+                        </div>
+                    </div>
+                    <div class="text-right">
+                        <p class="text-sm font-medium text-gray-900">{{ posts_queued }} queued</p>
+                        <p class="text-xs text-gray-500">Auto: 20min</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
