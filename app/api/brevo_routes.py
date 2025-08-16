@@ -287,9 +287,9 @@ async def send_performance_newsletter(
 
 @router.post("/automation/revenue-alert")
 async def send_revenue_alert(
-    threshold: float = 50.0,
     background_tasks: BackgroundTasks,
-    send_immediately: bool = True
+    threshold: float = 50.0,
+    send_immediately: bool = True,
 ):
     """Déclenche une alerte de revenus si le seuil est atteint"""
     
