@@ -30,7 +30,12 @@ def send_magic_link(email: str = Form(...)):
         token = generate_magic_token(partner.id, email)
         
         # Construire le lien complet
-        base_url = getattr(settings, 'BASE_URL', 'http://localhost:5000')
+        # Utilise PUBLIC_BASE_URL si défini, sinon APP_BASE_URL, sinon fallback local
+        base_url = (
+            getattr(settings, 'PUBLIC_BASE_URL', None)
+            or getattr(settings, 'APP_BASE_URL', None)
+            or 'http://localhost:5000'
+        )
         magic_link = f"{base_url}/partner/login?token={token}"
         
         # Tenter d'envoyer par email via Brevo

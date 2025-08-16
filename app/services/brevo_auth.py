@@ -123,8 +123,8 @@ def send_magic_link_email(email: str, magic_link: str) -> bool:
     # Préparer la requête
     payload = {
         "sender": {
-            "name": "ContentFlow",
-            "email": "noreply@contentflow.app"
+            "name": getattr(settings, 'EMAIL_FROM_NAME', None) or "ContentFlow",
+            "email": getattr(settings, 'EMAIL_FROM', None) or "noreply@contentflow.app"
         },
         "to": [
             {

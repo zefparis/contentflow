@@ -17,5 +17,5 @@ autoDeploy = true
 # -------- Worker (APScheduler) — optionnel --------
 [service.worker]
 root  = "."
-start = "python -m app.scheduler_worker"
+start = "python -m app.workers.autopilot"
 restartPolicyType = "ON_FAILURE"
