@@ -100,19 +100,44 @@ for mod, opts in [
         logger.warning(f"Skip {mod}: {e}")
 
 # ---------- Static & SPA (après les routes API) ----------
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import HTMLResponse
+from pathlib import Path
+import logging
+
 ROOT = Path(__file__).resolve().parents[1]
 STATIC_DIR = ROOT / "app" / "static"
-DIST = ROOT / "client" / "dist"
+
+# On tente dans cet ordre : client/dist (Vite client), dist/public (build root), dist (fallback)
+CANDIDATES = [
+    ROOT / "client" / "dist",
+    ROOT / "dist" / "public",
+    ROOT / "dist",
+]
+
+log = logging.getLogger("uvicorn")
 
 if STATIC_DIR.is_dir():
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
-if DIST.is_dir():
-    # Sert la SPA Vite buildée
-    app.mount("/", StaticFiles(directory=str(DIST), html=True), name="spa")
-    logger.info(f"Serving SPA from {DIST}")
-else:
-    # Fallback lisible si le front n'est pas buildé
+_mounted = False
+for p in CANDIDATES:
+    if p.is_dir():
+        app.mount("/", StaticFiles(directory=str(p), html=True), name="spa")
+        log.info(f"[STATIC] Serving SPA from {p}")
+        _mounted = True
+        break
+
+@app.get("/__static_debug", include_in_schema=False)
+def _static_debug():
+    return {
+        "root": str(ROOT),
+        "static_dir": str(STATIC_DIR),
+        "candidates": {str(p): p.is_dir() for p in CANDIDATES},
+        "mounted": _mounted,
+    }
+
+if not _mounted:
     @app.get("/", include_in_schema=False)
     async def _root():
         return HTMLResponse(
@@ -120,7 +145,8 @@ else:
             "<title>ContentFlow API</title>"
             "<h1>ContentFlow API</h1>"
             "<ul><li><a href='/healthz'>/healthz</a></li>"
-            "<li><a href='/docs'>/docs</a></li></ul>"
+            "<li><a href='/docs'>/docs</a></li>"
+            "<li><a href='/__static_debug'>/__static_debug</a></li></ul>"
         )
 
 # ---------- Local runner ----------
