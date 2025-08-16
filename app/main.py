@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import asyncio
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -12,6 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from app.config import settings
 from app.db import init_db
 from app.utils.logger import logger
+from app.aiops.autopilot import ai_tick
 
 
 @asynccontextmanager
@@ -23,9 +25,38 @@ async def lifespan(app: FastAPI):
         logger.info("DB init OK")
     except Exception as e:
         logger.exception(f"DB init failed: {e}")
+    # Start internal AI autopilot scheduler if enabled
+    app.state.autopilot_task = None
+    try:
+        if getattr(settings, "FEATURE_AUTOPILOT", False):
+            interval_sec = max(60, int(getattr(settings, "AI_TICK_INTERVAL_MIN", 10)) * 60)
+            logger.info(f"Starting internal Autopilot scheduler (every {interval_sec}s) …")
+            async def _autopilot_loop():
+                while True:
+                    try:
+                        res = ai_tick(dry_run=getattr(settings, "AI_DRY_RUN", True))
+                        status = "ok" if res.get("ok") else f"err:{res.get('reason') or res.get('error')}"
+                        logger.info(f"[Autopilot] tick={status} dry={res.get('dry_run')} actions={len(res.get('executed', []))}")
+                        await asyncio.sleep(interval_sec)
+                    except Exception as e:
+                        logger.warning(f"[Autopilot] loop error: {e}")
+                        await asyncio.sleep(60)
+            app.state.autopilot_task = asyncio.create_task(_autopilot_loop())
+        else:
+            logger.info("Autopilot disabled by FEATURE_AUTOPILOT flag; internal scheduler not started.")
+    except Exception as e:
+        logger.warning(f"Failed to start internal Autopilot scheduler: {e}")
     yield
     # --- shutdown ---
     logger.info("ContentFlow shutdown complete.")
+    # Stop internal scheduler gracefully
+    task = getattr(app.state, "autopilot_task", None)
+    if task:
+        task.cancel()
+        try:
+            await task
+        except Exception:
+            pass
 
 
 app = FastAPI(
