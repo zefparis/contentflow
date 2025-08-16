@@ -28,3 +28,6 @@ async def init_db():
     # Import models to register metadata, then create all
     import app.models  # noqa: F401
     Base.metadata.create_all(bind=engine)
+
+# Backward-compat alias for older routes expecting get_session
+get_session = get_db

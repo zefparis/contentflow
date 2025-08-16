@@ -1,12 +1,19 @@
 from fastapi import APIRouter, Request, Body, Depends
 from fastapi.responses import JSONResponse
-from sqlalchemy import and_
 import datetime as dt
-import json
 
 from app.config import settings
 from app.db import get_session
-from app.models import ByopSubmission, PartnerAccount, Assignment, Asset, Partner
+
+# Optional models: fallback to mocks if not present
+try:
+    from app.models import ByopSubmission, PartnerAccount, Assignment, Asset, Partner
+except Exception:  # models may be missing; route code handles fallbacks
+    ByopSubmission = None
+    PartnerAccount = None
+    Assignment = None
+    Asset = None
+    Partner = None
 
 router = APIRouter(prefix="/api/byop", tags=["byop"])
 

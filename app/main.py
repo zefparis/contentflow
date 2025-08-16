@@ -45,6 +45,16 @@ async def _healthz():
 async def _health():
     return {"ok": True}
 
+# ---------- Feature flags debug ----------
+@app.get("/__feature_flags", include_in_schema=False)
+def _feature_flags():
+    return {
+        "FEATURE_BYOP": getattr(settings, "FEATURE_BYOP", False),
+        "FEATURE_BYOP_PUBLISH": getattr(settings, "FEATURE_BYOP_PUBLISH", False),
+        "BYOP_PUBLISH_PLATFORMS": getattr(settings, "BYOP_PUBLISH_PLATFORMS", ""),
+        "PUBLIC_BASE_URL": getattr(settings, "PUBLIC_BASE_URL", ""),
+    }
+
 # ---------- Core routers (safe include) ----------
 def _include(router, prefix: str | None = None, tags: list[str] | None = None):
     try:
