@@ -24,5 +24,7 @@ def get_db():
 
 
 async def init_db():
-    from app.models import Source, Asset, Post, Run, Link
+    """Create all tables based on models metadata."""
+    # Import models to register metadata, then create all
+    import app.models  # noqa: F401
     Base.metadata.create_all(bind=engine)
