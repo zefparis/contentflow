@@ -1,0 +1,31 @@
+# railway.toml — ContentFlow (API + Worker)
+# Build via Nixpacks, run via Uvicorn (Python) et worker séparé.
+
+[build]
+builder = "NIXPACKS"
+
+[env]
+# force ffmpeg dans l’image (utile pour ffmpeg utils)
+NIXPACKS_PKGS = "ffmpeg"
+# runtime Python
+PYTHON_VERSION = "3.11"
+# par défaut sur Railway (utile en local ou pour sanity)
+PORT = "8080"
+
+# ------------------------------
+# Service API (FastAPI/Uvicorn)
+# ------------------------------
+[service.api]
+root  = "."
+start = "python -m uvicorn app.main:app --host 0.0.0.0 --port $PORT"
+# Healthcheck utilisé par Railway pour valider le déploiement
+healthcheckPath = "/healthz"
+
+# ------------------------------
+# Service Worker (scheduler/APScheduler)
+# ------------------------------
+[service.worker]
+root  = "."
+start = "python -m app.scheduler_worker"
+# Redémarrer si crash uniquement (évite de boucler sur un exit 0)
+restartPolicyType = "ON_FAILURE"
