@@ -1,7 +1,8 @@
 from fastapi import APIRouter, Form, Request, Query
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
+from pydantic import BaseModel
 from app.db import SessionLocal
-from app.models import Partner
+from app.models import Partner, MagicLink
 from app.services.brevo_auth import (
     generate_magic_token, 
     validate_magic_token, 
@@ -10,8 +11,68 @@ from app.services.brevo_auth import (
 )
 from app.config import settings
 import datetime as dt
+import secrets
 
 router = APIRouter(tags=["partner_auth"])
+
+
+class MagicLinkRequest(BaseModel):
+    email: str
+
+
+@router.post("/api/partner/auth/magic-link")
+def api_send_magic_link(req: MagicLinkRequest):
+    """
+    JSON API: Génère et envoie un lien magique BYOP.
+    - Body: {"email": string}
+    - Success: {"success": true}
+    - Error: {"error": string}
+    """
+    email = (req.email or "").lower().strip()
+    if not email:
+        return JSONResponse({"error": "invalid_email"}, status_code=400)
+
+    db = SessionLocal()
+    try:
+        # Créer ou récupérer le partenaire
+        partner = db.query(Partner).filter(Partner.email == email).first()
+        if not partner:
+            partner = Partner(email=email)
+            db.add(partner)
+            db.commit()
+            db.refresh(partner)
+
+        # Générer un token sécurisé et persister en base
+        token = secrets.token_urlsafe(32)
+        expires = dt.datetime.utcnow() + dt.timedelta(minutes=15)
+        ml = MagicLink(partner_id=partner.id, email=email, token=token, expires_at=expires)
+        db.add(ml)
+        db.commit()
+
+        # Construire l'URL de connexion
+        base_url = (
+            getattr(settings, 'PUBLIC_BASE_URL', None)
+            or getattr(settings, 'APP_BASE_URL', None)
+            or 'http://localhost:5000'
+        )
+        login_url = f"{base_url}/partner/login?token={token}"
+
+        # Vérifier configuration Brevo
+        if not getattr(settings, 'BREVO_API_KEY', None):
+            # Ne pas exposer la clé manquante; message générique
+            return JSONResponse({"error": "Email service not configured"}, status_code=500)
+
+        # Envoyer l'email
+        sent = send_magic_link_email(email, login_url)
+        if not sent:
+            return JSONResponse({"error": "Email send failed"}, status_code=500)
+
+        return {"success": True}
+
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+    finally:
+        db.close()
 
 
 @router.post("/partner/magic")
@@ -117,39 +178,51 @@ def send_magic_link(email: str = Form(...)):
 
 @router.get("/partner/login")
 def partner_login(token: str = Query(...)):
-    """Authentifie un partenaire via token magique."""
-    token_data = validate_magic_token(token)
-    if not token_data:
-        return HTMLResponse("""
-        <h3>🔗 Lien invalide</h3>
-        <p>Ce lien est invalide ou a expiré.</p>
-        <p><a href="/partners">← Retour à l'accueil</a></p>
-        """, status_code=400)
-    
-
-    
-    # Mettre à jour last_login
+    """Authentifie un partenaire via token magique (DB d'abord, fallback mémoire)."""
     db = SessionLocal()
+    partner_id = None
     try:
-        partner = db.query(Partner).filter(Partner.id == token_data["partner_id"]).first()
-        if partner:
-            partner.last_login = dt.datetime.utcnow()
+        # 1) Vérifier le token persistant
+        ml = db.query(MagicLink).filter(MagicLink.token == token, MagicLink.used == False).first()
+        now = dt.datetime.utcnow()
+        if ml and ml.expires_at and ml.expires_at > now:
+            partner_id = ml.partner_id
+            ml.used = True
             db.commit()
+        else:
+            # 2) Fallback sur le token en mémoire (compat)
+            token_data = validate_magic_token(token)
+            if token_data:
+                partner_id = token_data["partner_id"]
+                cleanup_magic_token(token)
+
+        if not partner_id:
+            return HTMLResponse(
+                """
+                <h3>🔗 Lien invalide</h3>
+                <p>Ce lien est invalide ou a expiré.</p>
+                <p><a href='/partners'>← Retour à l'accueil</a></p>
+                """,
+                status_code=400,
+            )
+
+        # Mettre à jour last_login
+        partner = db.query(Partner).filter(Partner.id == partner_id).first()
+        if partner:
+            partner.last_login = now
+            db.commit()
+
     finally:
         db.close()
-    
-    # Nettoyer le token
-    cleanup_magic_token(token)
-    
+
     # Rediriger vers le portail avec cookie
     response = RedirectResponse("/partner/portal", status_code=303)
     response.set_cookie(
-        "partner_id", 
-        token_data["partner_id"], 
+        "partner_id",
+        partner_id,
         max_age=86400 * 7,  # 7 jours
-        httponly=True
+        httponly=True,
     )
-    
     return response
 
 

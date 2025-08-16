@@ -181,6 +181,16 @@ class Partner(Base):
     withdraw_requests = relationship("WithdrawRequest")
 
 
+class MagicLink(Base):
+    __tablename__ = "magic_links"
+    id = Column(String, primary_key=True, default=lambda: str(uuid4()))
+    partner_id = Column(String, ForeignKey("partners.id", ondelete="CASCADE"), index=True)
+    email = Column(String, nullable=False, index=True)
+    token = Column(String, unique=True, index=True, nullable=False)
+    used = Column(Boolean, default=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+
 class WithdrawRequest(Base):
     __tablename__ = "withdraw_requests"
     
