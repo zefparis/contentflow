@@ -45,6 +45,20 @@ async def _healthz():
 async def _health():
     return {"ok": True}
 
+# ---------- Legacy path rewrite middleware ----------
+@app.middleware("http")
+async def _rewrite_legacy_paths(request, call_next):
+    """Rewrite older frontend paths to current API structure.
+    - /partners/api/* => /api/*
+    - /api/ai/orchestrator/* => /api/ai/*
+    """
+    path = request.url.path
+    if path.startswith("/partners/api/"):
+        request.scope["path"] = path.replace("/partners/api", "/api", 1)
+    elif path.startswith("/api/ai/orchestrator/"):
+        request.scope["path"] = path.replace("/api/ai/orchestrator", "/api/ai", 1)
+    return await call_next(request)
+
 # ---------- Feature flags debug ----------
 @app.get("/__feature_flags", include_in_schema=False)
 def _feature_flags():
@@ -101,6 +115,7 @@ for mod, opts in [
     ("app.routes.partners_ui",        {}),
     ("app.routes.partner_auth",       {}),
     ("app.routes.partners_admin",     {}),
+    ("app.routes.compat",             {}),
 ]:
     try:
         modobj = __import__(mod, fromlist=["router"])
