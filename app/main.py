@@ -1,140 +1,132 @@
-import asyncio
+# app/main.py
+from __future__ import annotations
+
+import os
+from pathlib import Path
 from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
+from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
-from fastapi.templating import Jinja2Templates
-import uvicorn
 
 from app.config import settings
 from app.db import init_db
-from app.routes import health, ui, sources, assets, posts, jobs, reports
-# Additional routes for ContentFlow
-try:
-    from app.routes import metrics, publish, compliance, ai, serpapi
-    EXTENDED_ROUTES = True
-except ImportError:
-    EXTENDED_ROUTES = False
-# from app.services.scheduler import scheduler
 from app.utils.logger import logger
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup
-    logger.info("Starting ContentFlow application...")
-    await init_db()
-    # scheduler.start()
-    logger.info("Application started successfully")
-    
+    # --- startup ---
+    logger.info("Booting ContentFlow…")
+    try:
+        await init_db()
+        logger.info("DB init OK")
+    except Exception as e:
+        logger.exception(f"DB init failed: {e}")
     yield
-    
-    # Shutdown
-    logger.info("Shutting down application...")
-    # scheduler.shutdown()
-    logger.info("Application shutdown complete")
+    # --- shutdown ---
+    logger.info("ContentFlow shutdown complete.")
 
 
 app = FastAPI(
     title="ContentFlow",
     description="Automated Content Pipeline",
     version="1.0.0",
-    lifespan=lifespan
+    lifespan=lifespan,
 )
 
-# Mount static files
-app.mount("/static", StaticFiles(directory="app/static"), name="static")
+# ---------- Health (Railway healthcheck) ----------
+@app.get("/healthz", include_in_schema=False)
+@app.head("/healthz", include_in_schema=False)
+async def _healthz():
+    return {"ok": True}
 
-# Include routers
-app.include_router(health.router, prefix="/api")
-app.include_router(ui.router)
-app.include_router(sources.router, prefix="/api")
-app.include_router(assets.router, prefix="/api")
-app.include_router(posts.router, prefix="/api")
-app.include_router(jobs.router, prefix="/api")
-app.include_router(reports.router, prefix="/api")
+@app.get("/health", include_in_schema=False)
+async def _health():
+    return {"ok": True}
 
-# Include additional ContentFlow routes if available
-if EXTENDED_ROUTES:
+# ---------- Core routers (safe include) ----------
+def _include(router, prefix: str | None = None, tags: list[str] | None = None):
     try:
-        app.include_router(metrics.router, prefix="/api", tags=["metrics"])
-        app.include_router(publish.router, prefix="/api", tags=["publish"]) 
-        app.include_router(compliance.router, prefix="/api", tags=["compliance"])
-        app.include_router(ai.router, prefix="/api", tags=["ai"])
-        app.include_router(serpapi.router, prefix="/api", tags=["serpapi"])
-        logger.info("Extended routes loaded successfully")
+        if prefix or tags:
+            app.include_router(router, prefix=prefix or "", tags=tags)
+        else:
+            app.include_router(router)
     except Exception as e:
-        logger.warning(f"Some extended routes failed to load: {e}")
+        logger.warning(f"Router include failed: {e}")
 
-# Add new production management routes
+# Core
 try:
-    from app.routes import management
-    app.include_router(management.router)
-    logger.info("Management routes loaded")
-except ImportError:
-    logger.warning("Management routes not available")
+    from app.routes import ui, sources, assets, posts, jobs, reports
+    _include(ui.router)
+    _include(sources.router, prefix="/api")
+    _include(assets.router,  prefix="/api")
+    _include(posts.router,   prefix="/api")
+    _include(jobs.router,    prefix="/api")
+    _include(reports.router, prefix="/api")
+    logger.info("Core routers mounted.")
+except Exception as e:
+    logger.exception(f"Core routers load error: {e}")
 
-# Add admin monitoring routes
-try:
-    from app.routes import admin_monitor
-    app.include_router(admin_monitor.router)
-    logger.info("Admin monitoring routes loaded")
-except ImportError:
-    logger.warning("Admin monitoring routes not available")
+# Extended (mount ce qui existe, ne crashe rien)
+for mod, opts in [
+    ("app.routes.metrics",            {"prefix": "/api", "tags": ["metrics"]}),
+    ("app.routes.publish",            {"prefix": "/api", "tags": ["publish"]}),
+    ("app.routes.compliance",         {"prefix": "/api", "tags": ["compliance"]}),
+    ("app.routes.ai",                 {"prefix": "/api", "tags": ["ai"]}),
+    ("app.routes.serpapi",            {"prefix": "/api", "tags": ["serpapi"]}),
+    ("app.routes.management",         {}),
+    ("app.routes.admin_monitor",      {}),
+    ("app.routes.assignment_routes",  {}),
+    ("app.routes.partnership_routes", {}),
+    ("app.routes.byop_routes",        {}),
+    ("app.routes.byop_publish",       {}),
+    # API/Providers
+    ("app.api.contentflow_routes",    {}),
+    ("app.api.supadata_routes",       {"prefix": "/api"}),
+    ("app.api.brevo_routes",          {"prefix": "/api"}),
+    ("app.routes.ig_oauth",           {"prefix": "/api"}),
+    ("app.routes.ig_publish",         {"prefix": "/api"}),
+    ("app.routes.ai_orchestrator",    {"prefix": "/api"}),
+    ("app.routes.partners_ui",        {}),
+    ("app.routes.partner_auth",       {}),
+    ("app.routes.partners_admin",     {}),
+]:
+    try:
+        modobj = __import__(mod, fromlist=["router"])
+        _include(modobj.router, **opts)
+        logger.info(f"Mounted {mod}")
+    except Exception as e:
+        logger.warning(f"Skip {mod}: {e}")
 
-# Add partner-specific routes
-try:
-    from app.routes import assignment_routes, partnership_routes, byop_routes
-    app.include_router(assignment_routes.router)
-    app.include_router(partnership_routes.router)  
-    app.include_router(byop_routes.router)
-    logger.info("Partner routes loaded")
-except ImportError:
-    logger.warning("Partner routes not available")
+# ---------- Static & SPA (après les routes API) ----------
+ROOT = Path(__file__).resolve().parents[1]
+STATIC_DIR = ROOT / "app" / "static"
+DIST = ROOT / "client" / "dist"
 
-# Add BYOP publishing routes
-try:
-    from app.routes import byop_publish
-    app.include_router(byop_publish.router)
-    logger.info("BYOP publishing routes loaded")
-except ImportError:
-    logger.warning("BYOP publishing routes not available")
+if STATIC_DIR.is_dir():
+    app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
-# Include ContentFlow and Supadata routers
-try:
-    from app.api.contentflow_routes import router as contentflow_router
-    from app.api.supadata_routes import router as supadata_router
-    from app.api.brevo_routes import router as brevo_router
-    app.include_router(contentflow_router)
-    app.include_router(supadata_router, prefix="/api")
-    app.include_router(brevo_router, prefix="/api")
-    
-    # Instagram Graph API routes
-    from app.routes.ig_oauth import router as ig_oauth_router
-    from app.routes.ig_publish import router as ig_publish_router
-    app.include_router(ig_oauth_router, prefix="/api")
-    app.include_router(ig_publish_router, prefix="/api")
-    
-    # AI Orchestrator routes
-    from app.routes.ai_orchestrator import router as ai_orchestrator_router
-    app.include_router(ai_orchestrator_router, prefix="/api")
-    
-    # Partner UI routes
-    from app.routes.partners_ui import router as partners_ui_router
-    from app.routes.partner_auth import router as partner_auth_router
-    from app.routes.partners_admin import router as partners_admin_router
-    app.include_router(partners_ui_router)
-    app.include_router(partner_auth_router)
-    app.include_router(partners_admin_router)
-    
-    logger.info("ContentFlow, Supadata, Brevo, Instagram, AI Orchestrator and Partners system loaded")
-except ImportError as e:
-    logger.warning(f"ContentFlow/Supadata routes not available: {e}")
+if DIST.is_dir():
+    # Sert la SPA Vite buildée
+    app.mount("/", StaticFiles(directory=str(DIST), html=True), name="spa")
+    logger.info(f"Serving SPA from {DIST}")
+else:
+    # Fallback lisible si le front n'est pas buildé
+    @app.get("/", include_in_schema=False)
+    async def _root():
+        return HTMLResponse(
+            "<!doctype html><meta charset='utf-8'>"
+            "<title>ContentFlow API</title>"
+            "<h1>ContentFlow API</h1>"
+            "<ul><li><a href='/healthz'>/healthz</a></li>"
+            "<li><a href='/docs'>/docs</a></li></ul>"
+        )
 
-
+# ---------- Local runner ----------
 if __name__ == "__main__":
-    uvicorn.run(
-        "app.main:app",
-        host="0.0.0.0",
-        port=5000,
-        reload=True
-    )
+    # Utilisé seulement en local; en prod Railway lance via Procfile/Start Command.
+    import uvicorn
+    port = int(os.getenv("PORT", getattr(settings, "PORT", 8080)))
+    is_dev = os.getenv("RELOAD", "0") == "1" or os.getenv("ENV", "").lower() in {"dev", "development", "local"}
+    uvicorn.run("app.main:app", host="0.0.0.0", port=port, reload=is_dev)
