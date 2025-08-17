@@ -1,4 +1,162 @@
-# app/config.py
+🛠 Mission Windsurf — Réparer les assets (CSS/JS) du frontend
+🎯 Objectif
+
+La page s’affiche “sans style” → les assets Vite (CSS/JS) ne sont pas servis correctement.
+Corriger la chaîne build/serve pour que index.html charge bien /assets/*.css et /assets/*.js avec les bons Content-Type.
+
+✅ À faire (ordre strict)
+1) vite.config.ts (racine)
+
+Forcer une build canon Vite → dist/public, assets sous /assets :
+
+import { defineConfig } from 'vite'
+import react from '@vitejs/plugin-react'
+
+export default defineConfig({
+  base: '/',                 // assets résolus en /assets/...
+  root: './client',          // si index.html est dans client/
+  build: {
+    outDir: '../dist/public', // output final
+    assetsDir: 'assets',
+    emptyOutDir: true,
+  },
+  plugins: [react()],
+})
+
+2) client/src/main.tsx
+
+S’assurer que le CSS est importé :
+
+import './index.css'
+
+3) app/main.py
+
+a) MIME types (avant mounting) :
+
+import mimetypes
+mimetypes.add_type("text/css", ".css")
+mimetypes.add_type("application/javascript", ".js")
+
+
+b) Endpoint de debug (rapide pour inspecter le build) :
+
+from fastapi.responses import JSONResponse
+from pathlib import Path
+
+@app.get("/__static_debug", include_in_schema=False)
+def __static_debug():
+    roots = ["app/static", "client/dist/public", "dist/public", "dist", "public"]
+    found = []
+    for r in roots:
+        p = Path(r)
+        if p.exists():
+            assets = []
+            adir = p / "assets"
+            if adir.exists():
+                assets = [str(x.relative_to(p)) for x in adir.glob("*")][:50]
+            found.append({"root": r, "exists": True, "assets_sample": assets})
+        else:
+            found.append({"root": r, "exists": False})
+    return JSONResponse({"roots": found})
+
+
+c) SPAFallbackMiddleware → ajouter /readyz dans les exclusions si pas déjà :
+
+self.excluded_prefixes = [
+    "/api", "/docs", "/redoc", "/openapi.json",
+    "/static", "/assets", "/health", "/healthz", "/readyz", "/__feature_flags",
+]
+
+
+d) Mount explicite des assets (belt & suspenders) :
+
+from fastapi.staticfiles import StaticFiles
+
+# si pas déjà fait :
+app.mount("/assets", StaticFiles(directory="app/static/assets"), name="assets")
+
+
+Garder aussi le mount racine app.mount("/", StaticFiles(directory="app/static", html=True), name="static-root") après health & middlewares.
+
+4) Dockerfile (vérifier la copie du build)
+
+Le stage frontend copie /app/dist/public/ → app/static/. Si besoin, ré-assert :
+
+# (déjà en place normalement)
+COPY --from=frontend /app/dist/public/ ./app/static/
+
+5) Nettoyage caches (optionnel mais recommandé)
+
+Supprimer les sorties dist/ locales obsolètes avant rebuild (Vite emptyOutDir: true le fait).
+
+Rebuild image et redeploy.
+
+🧪 Tests à exécuter
+
+Debug assets
+
+GET /__static_debug
+
+
+Attendu: app/static existe et assets_sample contient au moins un index-*.css et index-*.js.
+
+Types
+
+GET /assets/<ton-css>.css → 200 + header Content-Type: text/css
+
+GET /assets/<ton-js>.js → 200 + header Content-Type: application/javascript
+
+Page
+
+GET / → page stylée (pas de 404 dans l’onglet Réseau sur CSS/JS).
+
+Health
+
+GET /healthz = 200
+
+GET /readyz = 200 quand prêt (si activé)
+
+✅ Critères d’acceptation
+
+Plus de rendu “sans style”.
+
+/__static_debug liste les assets sous app/static/assets.
+
+CSS/JS servis avec bons mimetypes.
+
+Aucun 404 sur /assets/* en console navigateur.
+
+🧾 COMPTE RENDU attendu (obligatoire, Markdown)
+
+Résumé exéc’ (≤10 lignes) — ce qui a été modifié et résultat final (page stylée).
+
+Actions appliquées (liste ordonnée + chemins).
+
+Diffs/Extraits clés :
+
+vite.config.ts (bloc complet)
+
+client/src/main.tsx (import CSS)
+
+app/main.py (mimetypes + __static_debug + exclusions + mount /assets)
+
+(optionnel) Dockerfile (ligne COPY)
+
+Preuves :
+
+Sortie /__static_debug
+
+Headers des requêtes /assets/*.css et /assets/*.js
+
+Capture/log de la page chargée avec styles
+
+Points ouverts / TODO :
+
+Si bundle > 500 kB, proposer code-splitting (Vite manualChunks)
+
+CDN/Cache-Control à activer plus tard si besoin
+
+➡️ Applique ces patchs, rebuild, teste, puis livre le compte rendu.# app/config.py
 from __future__ import annotations
 
 from typing import Any, List, get_origin

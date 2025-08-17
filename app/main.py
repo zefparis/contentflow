@@ -10,10 +10,11 @@ from typing import Any
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request as StarletteRequest
 from starlette.responses import Response
+import mimetypes
 
 # Internal imports
 from app.config import settings
@@ -23,6 +24,10 @@ from app.aiops.autopilot import ai_tick
 # ------------------ Logging ------------------
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("contentflow")
+
+# Ensure correct MIME types for static assets
+mimetypes.add_type("text/css", ".css")
+mimetypes.add_type("application/javascript", ".js")
 
 # ------------------ Lifespan ------------------
 @asynccontextmanager
@@ -92,6 +97,11 @@ async def healthz():
 async def health():
     return {"ok": True}
 
+@app.get("/readyz", include_in_schema=False)
+async def readyz():
+    # In a real scenario we could check DB, background tasks, etc.
+    return {"ok": True}
+
 # ------------------ Middleware ------------------
 # CORS
 app.add_middleware(
@@ -108,7 +118,7 @@ class SPAFallbackMiddleware(BaseHTTPMiddleware):
         super().__init__(app)
         self.excluded_prefixes = [
             "/api", "/docs", "/redoc", "/openapi.json",
-            "/static", "/assets", "/health", "/healthz", "/__feature_flags",
+            "/static", "/assets", "/health", "/healthz", "/readyz", "/__feature_flags",
         ]
         candidates = [
             Path("app/static"),
@@ -170,6 +180,10 @@ app.add_middleware(LegacyRewriteMiddleware)
 app.add_middleware(SPAFallbackMiddleware)
 
 # ------------------ Static Frontend (mount last) ------------------
+# Explicit assets mount (belt & suspenders)
+if os.path.exists("app/static/assets"):
+    app.mount("/assets", StaticFiles(directory="app/static/assets"), name="assets")
+
 for d in ["app/static", "client/dist/public", "dist/public", "dist", "public"]:
     if os.path.exists(d):
         app.mount("/", StaticFiles(directory=d, html=True), name="frontend")
@@ -177,6 +191,23 @@ for d in ["app/static", "client/dist/public", "dist/public", "dist", "public"]:
         break
 
 # ------------------ Legacy Rewrite (replaced by middleware class above) ------------------
+
+# ------------------ Static Debug ------------------
+@app.get("/__static_debug", include_in_schema=False)
+def __static_debug():
+    roots = ["app/static", "client/dist/public", "dist/public", "dist", "public"]
+    found = []
+    for r in roots:
+        p = Path(r)
+        if p.exists():
+            assets = []
+            adir = p / "assets"
+            if adir.exists():
+                assets = [str(x.relative_to(p)) for x in adir.glob("*")][:50]
+            found.append({"root": r, "exists": True, "assets_sample": assets})
+        else:
+            found.append({"root": r, "exists": False})
+    return JSONResponse({"roots": found})
 
 # ------------------ Feature Flags Debug ------------------
 @app.get("/__feature_flags", include_in_schema=False)
