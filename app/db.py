@@ -1,3 +1,4 @@
+import logging
 from sqlalchemy import create_engine
 import sqlalchemy as sa
 from sqlalchemy.ext.declarative import declarative_base
@@ -14,6 +15,8 @@ engine = create_engine(
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
+
+logger = logging.getLogger("contentflow.db")
 
 
 def get_db():
@@ -77,6 +80,9 @@ async def init_db():
             add_column("jobs", "attempts", "INTEGER", "INTEGER", "0")
         if not has_column("jobs", "status"):
             add_column("jobs", "status", "TEXT", "TEXT", "'queued'")
+        # DLQ reason text column for failure diagnostics
+        if not has_column("jobs", "dlq_reason"):
+            add_column("jobs", "dlq_reason", "TEXT", "TEXT")
         for ts_col in ("created_at", "started_at", "completed_at"):
             if not has_column("jobs", ts_col):
                 add_column("jobs", ts_col, "DATETIME", "TIMESTAMP", 
