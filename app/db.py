@@ -1,5 +1,5 @@
 import logging
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 import sqlalchemy as sa
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
@@ -32,6 +32,12 @@ async def init_db():
     # Import models to register metadata, then create all
     import app.models  # noqa: F401
     Base.metadata.create_all(bind=engine)
+    
+    # Ensure required columns exist with light, idempotent migrations
+    try:
+        ensure_schema_metric_events(engine)
+    except Exception as e:
+        logger.warning(f"[schema] ensure metric_events failed: {e}")
     # --- lightweight auto-migrations for missing columns ---
     insp = sa.inspect(engine)
 
@@ -87,6 +93,36 @@ async def init_db():
             if not has_column("jobs", ts_col):
                 add_column("jobs", ts_col, "DATETIME", "TIMESTAMP", 
                           "CURRENT_TIMESTAMP" if ts_col == "created_at" else None)
+
+# --- Schema hotfixes ---
+def ensure_schema_metric_events(bind_engine):
+    """Ensure metric_events.metadata_json exists (Postgres/SQLite-compatible)."""
+    try:
+        dialect = bind_engine.dialect.name
+        with bind_engine.begin() as conn:
+            if dialect.startswith("post"):
+                check_sql = text(
+                    """
+                    SELECT 1
+                    FROM information_schema.columns
+                    WHERE table_name='metric_events' AND column_name='metadata_json'
+                    LIMIT 1
+                    """
+                )
+                add_sql = text("ALTER TABLE metric_events ADD COLUMN IF NOT EXISTS metadata_json TEXT")
+            elif dialect.startswith("sqlite"):
+                check_sql = text("SELECT 1 FROM pragma_table_info('metric_events') WHERE name='metadata_json'")
+                add_sql = text("ALTER TABLE metric_events ADD COLUMN metadata_json TEXT")
+            else:
+                check_sql = text("SELECT 1")
+                add_sql = None
+
+            res = conn.execute(check_sql).first()
+            if res is None and add_sql is not None:
+                conn.execute(add_sql)
+                logger.info("[schema] added metric_events.metadata_json")
+    except Exception as e:
+        logger.warning(f"[schema] metric_events ensure failed: {e}")
 
 # Backward-compat alias for older routes expecting get_session
 get_session = get_db

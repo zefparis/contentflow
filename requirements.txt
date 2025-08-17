@@ -20,6 +20,7 @@ python-multipart>=0.0.9
 
 # Images (if used by utils)
 pillow>=10.3.0
+ImageHash>=4.3.1
 
 # Tasks
 celery>=5.3.6

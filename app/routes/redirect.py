@@ -63,8 +63,13 @@ async def redirect_shortlink(
         }
     )
     
-    db.add(metric_event)
-    db.commit()
+    try:
+        db.add(metric_event)
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Failed to record click metric: {e}")
+        raise
     
     # Update Prometheus metrics
     increment_click_metric(platform)

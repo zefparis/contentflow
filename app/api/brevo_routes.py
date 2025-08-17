@@ -6,6 +6,7 @@ Gestion des campagnes email, listes de contacts et automatisations
 from fastapi import APIRouter, HTTPException, BackgroundTasks
 from typing import Dict, List, Optional
 from datetime import datetime, timedelta
+from app.utils.datetime import utcnow, iso_utc
 import logging
 from pydantic import BaseModel
 

@@ -370,8 +370,13 @@ def job_metrics() -> Dict[str, Any]:
             except Exception as e:
                 logger.error(f"Error collecting metrics for post {post.id}: {e}")
         
-        db.commit()
-        db.close()
+        try:
+            db.commit()
+        except Exception:
+            db.rollback()
+            raise
+        finally:
+            db.close()
         
         result = {
             "success": True,

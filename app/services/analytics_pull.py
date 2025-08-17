@@ -13,6 +13,14 @@ from app.utils.logger import logger, set_post_context
 from app.utils.jobs import check_rate_limit, should_backoff_platform
 from app.utils.datetime import utcnow
 
+def _safe_commit(db: Session) -> None:
+    """Commit the session; rollback and re-raise on failure."""
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+
 def pull_youtube_stats(db: Session, post: Post) -> Optional[Dict[str, Any]]:
     """Pull YouTube video statistics via Data API v3."""
     if not post.platform_id or not os.getenv("YOUTUBE_API_KEY"):
@@ -67,7 +75,7 @@ def pull_youtube_stats(db: Session, post: Post) -> Optional[Dict[str, Any]]:
         
         # Update post metrics JSON
         post.metrics_json = json.dumps(metrics)
-        db.commit()
+        _safe_commit(db)
         
         logger.info(f"YouTube stats updated for post {post.id}: {metrics['views']} views")
         return metrics
@@ -122,7 +130,7 @@ def pull_reddit_stats(db: Session, post: Post) -> Optional[Dict[str, Any]]:
         
         # Update post metrics JSON
         post.metrics_json = json.dumps(metrics)
-        db.commit()
+        _safe_commit(db)
         
         logger.info(f"Reddit stats updated for post {post.id}: {metrics['score']} score")
         return metrics
@@ -183,7 +191,7 @@ def pull_pinterest_stats(db: Session, post: Post) -> Optional[Dict[str, Any]]:
         
         # Update post metrics JSON
         post.metrics_json = json.dumps(metrics)
-        db.commit()
+        _safe_commit(db)
         
         logger.info(f"Pinterest stats updated for post {post.id}: {metrics['impressions']} impressions")
         return metrics
@@ -259,7 +267,7 @@ def _estimate_instagram_metrics(db: Session, post: Post) -> Dict[str, Any]:
             db.add(metric_event)
     
     post.metrics_json = json.dumps(metrics)
-    db.commit()
+    _safe_commit(db)
     
     return metrics
 
@@ -292,6 +300,6 @@ def _estimate_tiktok_metrics(db: Session, post: Post) -> Dict[str, Any]:
             db.add(metric_event)
     
     post.metrics_json = json.dumps(metrics)
-    db.commit()
+    _safe_commit(db)
     
     return metrics
