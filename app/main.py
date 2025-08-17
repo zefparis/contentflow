@@ -1,4 +1,3 @@
-# app/main.py
 from __future__ import annotations
 
 import os
@@ -6,61 +5,45 @@ import asyncio
 import logging
 from pathlib import Path
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Request, Response, Depends, HTTPException, status
+from typing import Any
+
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import JSONResponse, FileResponse, HTMLResponse
-from typing import Optional, Dict, Any
+from fastapi.responses import FileResponse, HTMLResponse
 
 # Internal imports
 from app.config import settings
 from app.db import init_db
 from app.aiops.autopilot import ai_tick
-from app.routes import (
-    ui,
-    sources,
-    assets,
-    posts,
-    jobs,
-    reports,
-    auth,
-    posts,
-    sources,
-    assets,
-    jobs,
-    payments,
-    partner_auth,
-    byop,
-    stubs,
-    byop_stub
-)
 
-# Configure logging
+# ------------------ Logging ------------------
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("contentflow")
 
-# ---------- Lifespan ----------
+# ------------------ Lifespan ------------------
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # --- startup ---
-    logger.info("Booting ContentFlow…")
+    logger.info("🚀 Booting ContentFlow…")
+
+    # Init DB
     try:
         await init_db()
-        logger.info("DB init OK")
+        logger.info("✅ DB init OK")
     except Exception as e:
-        logger.exception(f"DB init failed: {e}")
+        logger.exception(f"❌ DB init failed: {e}")
 
-    # Autopilot internal scheduler
+    # Autopilot scheduler
     app.state.autopilot_task = None
     try:
         if getattr(settings, "FEATURE_AUTOPILOT", False):
-            interval_sec = max(60, int(getattr(settings, "AI_TICK_INTERVAL_MIN", 10)) * 60)
-            logger.info(f"Starting internal Autopilot scheduler (every {interval_sec}s) …")
+            interval_sec = max(60, int(settings.AI_TICK_INTERVAL_MIN) * 60)
+            logger.info(f"▶️ Starting Autopilot every {interval_sec}s")
 
             async def _autopilot_loop():
                 while True:
                     try:
-                        res = ai_tick(dry_run=getattr(settings, "AI_DRY_RUN", True))
+                        res: dict[str, Any] = ai_tick(dry_run=settings.AI_DRY_RUN)
                         status = "ok" if res.get("ok") else f"err:{res.get('reason') or res.get('error')}"
                         logger.info(
                             f"[Autopilot] tick={status} dry={res.get('dry_run')} "
@@ -73,14 +56,13 @@ async def lifespan(app: FastAPI):
 
             app.state.autopilot_task = asyncio.create_task(_autopilot_loop())
         else:
-            logger.info("Autopilot disabled by FEATURE_AUTOPILOT flag; scheduler not started.")
+            logger.info("⚠️ Autopilot disabled (FEATURE_AUTOPILOT=False)")
     except Exception as e:
-        logger.warning(f"Failed to start internal Autopilot scheduler: {e}")
+        logger.warning(f"Failed to start Autopilot scheduler: {e}")
 
     yield
 
-    # --- shutdown ---
-    logger.info("ContentFlow shutdown complete.")
+    logger.info("🛑 Shutting down ContentFlow…")
     task = getattr(app.state, "autopilot_task", None)
     if task:
         task.cancel()
@@ -89,8 +71,7 @@ async def lifespan(app: FastAPI):
         except Exception:
             pass
 
-
-# ---------- FastAPI App ----------
+# ------------------ App ------------------
 app = FastAPI(
     title="ContentFlow",
     description="Automated Content Pipeline",
@@ -98,105 +79,77 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# Add CORS middleware
+# ------------------ Middleware ------------------
+# CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.CORS_ORIGINS if hasattr(settings, 'CORS_ORIGINS') else ["*"],
+    allow_origins=getattr(settings, "CORS_ORIGINS", ["*"]),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Mount built frontend if available (served as root)
-frontend_dir_candidates = [
-    "app/static",
-    "client/dist/public",
-    "dist/public",
-    "dist",
-    "public",
-]
-_static_root_mounted = False
-for d in frontend_dir_candidates:
-    if os.path.exists(d):
-        # Serve SPA with index.html
-        app.mount("/", StaticFiles(directory=d, html=True), name="static-root")
-        _static_root_mounted = True
-        logger.info(f"Mounted frontend static root at '{d}'")
-        break
-
-# Add SPA fallback middleware
+# SPA Fallback Middleware
 class SPAFallbackMiddleware:
     def __init__(self, app):
         self.app = app
-        self.static_dirs = [
+        self.excluded_prefixes = ["/api", "/docs", "/redoc", "/openapi.json", "/static", "/assets"]
+        self.candidates = [
             Path("app/static"),
             Path("client/dist/public"),
             Path("dist/public"),
             Path("dist"),
             Path("public"),
         ]
-        self.excluded_prefixes = [
-            "/api",
-            "/docs",
-            "/redoc",
-            "/openapi.json",
-            "/static",
-            "/assets"
-        ]
-        self.candidates = [Path(d) for d in self.static_dirs if Path(d).exists()]
+        self.candidates = [p for p in self.candidates if p.exists()]
 
     async def __call__(self, scope, receive, send):
-        assert scope['type'] == 'http'
-        request = Request(scope, receive)
-        
-        # Skip middleware for excluded paths
-        if any(request.url.path.startswith(prefix) for prefix in self.excluded_prefixes):
+        if scope["type"] != "http":
             return await self.app(scope, receive, send)
-        
-        # Try to serve the requested file first
-        try:
-            response = await self.app(scope, receive, send)
-            # If 404 and not an API request, try to serve index.html
-            if hasattr(response, "status_code") and response.status_code == 404:
-                path = request.url.path.lstrip('/')
-                for candidate in self.candidates:
-                    file_path = candidate / path
-                    
-                    # If it's a directory, try index.html
-                    if file_path.is_dir() and (file_path / "index.html").exists():
-                        return FileResponse(file_path / "index.html")
-                    # If it's a file, serve it
-                    elif file_path.is_file():
-                        return FileResponse(file_path)
-                    
-                    # If we're at the root, try index.html
-                    if not path and (candidate / "index.html").exists():
-                        return FileResponse(candidate / "index.html")
-            
-            return response
-        except Exception as e:
-            # If any error occurs, try to serve index.html as a last resort
-            for candidate in self.candidates:
-                index_path = candidate / "index.html"
-                if index_path.exists():
-                    return FileResponse(index_path)
-            raise  # Re-raise if no index.html is found
+
+        request = Request(scope, receive)
+
+        # Skip if path starts with excluded prefix
+        if any(request.url.path.startswith(p) for p in self.excluded_prefixes):
+            return await self.app(scope, receive, send)
+
+        # Try to serve static file first
+        path = request.url.path.lstrip("/")
+        for candidate in self.candidates:
+            file_path = candidate / path
+            if file_path.is_file():
+                return FileResponse(file_path)
+
+        # Fallback → serve index.html
+        for candidate in self.candidates:
+            index_path = candidate / "index.html"
+            if index_path.exists():
+                return FileResponse(index_path)
+
+        return await self.app(scope, receive, send)
 
 app.add_middleware(SPAFallbackMiddleware)
 
-# ---------- Health endpoints ----------
+# ------------------ Static Frontend ------------------
+for d in ["app/static", "client/dist/public", "dist/public", "dist", "public"]:
+    if os.path.exists(d):
+        app.mount("/", StaticFiles(directory=d, html=True), name="frontend")
+        logger.info(f"📦 Mounted frontend from {d}")
+        break
+
+# ------------------ Health Endpoints ------------------
 @app.get("/healthz", include_in_schema=False)
 @app.head("/healthz", include_in_schema=False)
-async def _healthz():
+async def healthz():
     return {"ok": True}
 
 @app.get("/health", include_in_schema=False)
-async def _health():
+async def health():
     return {"ok": True}
 
-# ---------- Legacy path rewrite ----------
+# ------------------ Legacy Rewrite ------------------
 @app.middleware("http")
-async def _rewrite_legacy_paths(request, call_next):
+async def legacy_rewrite(request, call_next):
     path = request.url.path
     if path.startswith("/partners/api/"):
         request.scope["path"] = path.replace("/partners/api", "/api", 1)
@@ -204,95 +157,72 @@ async def _rewrite_legacy_paths(request, call_next):
         request.scope["path"] = path.replace("/api/ai/orchestrator", "/api/ai", 1)
     return await call_next(request)
 
-# ---------- Feature flags debug ----------
+# ------------------ Feature Flags Debug ------------------
 @app.get("/__feature_flags", include_in_schema=False)
-def _feature_flags():
+def feature_flags():
     return {
-        "FEATURE_BYOP": getattr(settings, "FEATURE_BYOP", False),
-        "FEATURE_BYOP_PUBLISH": getattr(settings, "FEATURE_BYOP_PUBLISH", False),
-        "BYOP_PUBLISH_PLATFORMS": getattr(settings, "BYOP_PUBLISH_PLATFORMS", ""),
-        "PUBLIC_BASE_URL": getattr(settings, "PUBLIC_BASE_URL", ""),
+        "FEATURE_BYOP": settings.FEATURE_BYOP,
+        "FEATURE_BYOP_PUBLISH": settings.FEATURE_BYOP_PUBLISH,
+        "BYOP_PUBLISH_PLATFORMS": settings.BYOP_PUBLISH_PLATFORMS,
+        "PUBLIC_BASE_URL": settings.PUBLIC_BASE_URL,
     }
 
-# ---------- Router helper ----------
-def _include(router, prefix: str | None = None, tags: list[str] | None = None):
+# ------------------ Router Helper ------------------
+def _include(module: str, **opts):
     try:
-        if prefix or tags:
-            app.include_router(router, prefix=prefix or "", tags=tags)
-        else:
-            app.include_router(router)
+        mod = __import__(module, fromlist=["router"])
+        app.include_router(mod.router, **opts)
+        logger.info(f"✅ Mounted {module} {opts}")
     except Exception as e:
-        logger.warning(f"Router include failed: {e}")
+        logger.warning(f"⚠️ Skip {module}: {e}")
 
-# ---------- Core Routers ----------
-_mounted = False
-try:
-    from app.routes import ui, sources, assets, posts, jobs, reports
-    _include(ui.router)
-    _include(sources.router, prefix="/api")
-    _include(assets.router,  prefix="/api")
-    _include(posts.router,   prefix="/api")
-    _include(jobs.router,    prefix="/api")
-    _include(reports.router, prefix="/api")
-    logger.info("Core routers mounted.")
-    _mounted = True
-except Exception as e:
-    logger.exception(f"Core routers load error: {e}")
-
-# ---------- Extended Routers ----------
+# Core Routers
 for mod, opts in [
-    ("app.routes.metrics",            {"prefix": "/api", "tags": ["metrics"]}),
-    ("app.routes.publish",            {"prefix": "/api", "tags": ["publish"]}),
-    ("app.routes.compliance",         {"prefix": "/api", "tags": ["compliance"]}),
-    ("app.routes.ai",                 {"prefix": "/api", "tags": ["ai"]}),
-    ("app.routes.serpapi",            {"prefix": "/api", "tags": ["serpapi"]}),
-    ("app.routes.management",         {}),
-    ("app.routes.admin_monitor",      {}),
-    ("app.routes.assignment_routes",  {}),
-    ("app.routes.partnership_routes", {}),
-    ("app.routes.byop_routes",        {}),
-    ("app.routes.byop_publish",       {}),
-    # APIs
-    ("app.api.contentflow_routes",    {}),
-    ("app.api.supadata_routes",       {"prefix": "/api"}),
-    ("app.api.brevo_routes",          {"prefix": "/api"}),
-    ("app.routes.ig_oauth",           {"prefix": "/api"}),
-    ("app.routes.ig_publish",         {"prefix": "/api"}),
-    ("app.routes.ai_orchestrator",    {"prefix": "/api"}),
-    ("app.routes.partners_ui",        {}),
-    # ✅ Correction: Partner Auth exposé sous /api/partner/*
-    ("app.routes.partner_auth",       {"prefix": "/api/partner", "tags": ["partner_auth"]}),
-    ("app.routes.partners_admin",     {}),
-    ("app.routes.compat",             {}),
-    
-    # Stub endpoints for frontend compatibility
-    ("app.routes.stubs",              {"prefix": "", "tags": ["stubs"]}),
-    ("app.routes.byop_stub",          {"prefix": "", "tags": ["byop"]}),
+    ("app.routes.ui", {}),
+    ("app.routes.sources", {"prefix": "/api"}),
+    ("app.routes.assets", {"prefix": "/api"}),
+    ("app.routes.posts", {"prefix": "/api"}),
+    ("app.routes.jobs", {"prefix": "/api"}),
+    ("app.routes.reports", {"prefix": "/api"}),
 ]:
-    try:
-        modobj = __import__(mod, fromlist=["router"])
-        _include(modobj.router, **opts)
-        logger.info(f"Mounted {mod} with opts={opts}")
-        _mounted = True
-    except Exception as e:
-        logger.warning(f"Skip {mod}: {e}")
+    _include(mod, **opts)
 
-if not _mounted:
-    @app.get("/", include_in_schema=False)
-    async def _root():
-        return HTMLResponse(
-            "<!doctype html><meta charset='utf-8'>"
-            "<title>ContentFlow API</title>"
-            "<h1>ContentFlow API</h1>"
-            "<ul><li><a href='/healthz'>/healthz</a></li>"
-            "<li><a href='/docs'>/docs</a></li>"
-            "<li><a href='/__static_debug'>/__static_debug</a></li></ul>"
-        )
+# Extended Routers
+for mod, opts in [
+    ("app.routes.metrics", {"prefix": "/api", "tags": ["metrics"]}),
+    ("app.routes.publish", {"prefix": "/api", "tags": ["publish"]}),
+    ("app.routes.compliance", {"prefix": "/api", "tags": ["compliance"]}),
+    ("app.routes.ai", {"prefix": "/api", "tags": ["ai"]}),
+    ("app.routes.serpapi", {"prefix": "/api", "tags": ["serpapi"]}),
+    ("app.routes.partner_auth", {"prefix": "/api/partner", "tags": ["partner_auth"]}),
+    ("app.routes.byop_routes", {"prefix": "/api"}),
+    ("app.routes.byop_publish", {"prefix": "/api"}),
+    ("app.routes.ig_oauth", {"prefix": "/api"}),
+    ("app.routes.ig_publish", {"prefix": "/api"}),
+    ("app.routes.ai_orchestrator", {"prefix": "/api"}),
+    ("app.api.supadata_routes", {"prefix": "/api"}),
+    ("app.api.brevo_routes", {"prefix": "/api"}),
+    # Stubs
+    ("app.routes.stubs", {"prefix": "", "tags": ["stubs"]}),
+    ("app.routes.byop_stub", {"prefix": "", "tags": ["byop"]}),
+]:
+    _include(mod, **opts)
 
+# ------------------ Root fallback ------------------
+@app.get("/", include_in_schema=False)
+async def root():
+    return HTMLResponse(
+        "<!doctype html><meta charset='utf-8'>"
+        "<title>ContentFlow API</title>"
+        "<h1>ContentFlow API</h1>"
+        "<ul><li><a href='/healthz'>/healthz</a></li>"
+        "<li><a href='/docs'>/docs</a></li></ul>"
+    )
 
-# ---------- Local runner ----------
+# ------------------ Local Runner ------------------
 if __name__ == "__main__":
     import uvicorn
+
     port = int(os.getenv("PORT", getattr(settings, "PORT", 8080)))
-    is_dev = os.getenv("RELOAD", "0") == "1" or os.getenv("ENV", "").lower() in {"dev", "development", "local"}
-    uvicorn.run("app.main:app", host="0.0.0.0", port=port, reload=is_dev)
+    reload = os.getenv("RELOAD", "0") == "1" or os.getenv("ENV", "").lower() in {"dev", "development", "local"}
+    uvicorn.run("app.main:app", host="0.0.0.0", port=port, reload=reload)

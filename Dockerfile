@@ -1,16 +1,12 @@
-# Multi-stage Dockerfile: build frontend, run FastAPI backend
-
-# ---------- Stage 1: Frontend build ----------
+# ---------- Stage 1: Build Frontend ----------
 FROM node:18-bullseye AS frontend
 WORKDIR /app
 
-# Copy only files needed to build the frontend via vite
 COPY package.json package-lock.json* vite.config.ts ./
 COPY client ./client
 COPY shared ./shared
 COPY attached_assets ./attached_assets
 
-# Install deps and build only the Vite client
 RUN npm ci --no-audit --no-fund \
  && npx vite build --config vite.config.ts
 
@@ -38,16 +34,17 @@ COPY utils ./utils
 COPY shared ./shared
 COPY app/templates ./app/templates
 
-# Copy built frontend into FastAPI static dir
+# Copy frontend build → static dir
 RUN mkdir -p app/static
 COPY --from=frontend /app/dist/public/ ./app/static/
 
-# Default env
+# Expose default port
 ENV PORT=8000
 EXPOSE 8000
 
-# Healthcheck
-HEALTHCHECK --interval=30s --timeout=5s --retries=3 CMD curl -fsS http://localhost:${PORT:-8000}/healthz || exit 1
+# Healthcheck (optional)
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
+  CMD curl -fsS http://localhost:${PORT:-8000}/healthz || exit 1
 
-# Start FastAPI (use shell so ${PORT} is expanded)
-CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
+# Start FastAPI with resolved $PORT
+CMD sh -c "exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"
