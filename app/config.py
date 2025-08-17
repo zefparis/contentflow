@@ -1,6 +1,34 @@
-from typing import List
-from pydantic_settings import BaseSettings
+from typing import List, Any
+import json as _json
 from pydantic import field_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+def _smart_json_loads(v: Any) -> Any:
+    """
+    pydantic-settings utilise cette fonction pour décoder les types complexes.
+    - Si JSON valide -> retourne l’objet
+    - Sinon si string CSV -> split en liste
+    - Sinon -> renvoie tel quel (laissera le validator gérer)
+    """
+    if isinstance(v, (list, dict)):
+        return v
+    if isinstance(v, (bytes, bytearray)):
+        v = v.decode()
+    if not isinstance(v, str):
+        return v
+
+    s = v.strip()
+    # 1) tentative JSON
+    try:
+        return _json.loads(s)
+    except Exception:
+        pass
+    # 2) fallback CSV
+    if s and ("," in s) and not s.startswith(("{", "[")):
+        return [x.strip() for x in s.split(",") if x.strip()]
+    # 3) laisser tel quel
+    return v
 
 
 class Settings(BaseSettings):
@@ -120,17 +148,19 @@ class Settings(BaseSettings):
     # --- CORS ---
     CORS_ORIGINS: List[str] = ["*"]
 
-    # --- Helpers ---
+    # Helpers
     @property
     def META_BASE(self) -> str:
         return f"https://graph.facebook.com/{self.META_GRAPH_VERSION}"
 
-    model_config = {
-        "env_file": ".env",
-        "case_sensitive": False,
-    }
+    # Pydantic Settings v2 config (CSV/JSON ok)
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        case_sensitive=False,
+        json_loads=_smart_json_loads,
+    )
 
-    # --- v2 list parsing helpers (env strings -> list[str]) ---
+    # Ce validator reste utile si jamais le provider nous passe encore une string brute
     @field_validator(
         "PAYOUT_METHODS",
         "BYOP_PUBLISH_PLATFORMS",
