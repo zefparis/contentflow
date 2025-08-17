@@ -4,5 +4,5 @@ builder = "DOCKERFILE"
 dockerfilePath = "Dockerfile"
 
 [deploy]
-# Force explicit start to wrapper (ensures $PORT expansion under Railway)
-startCommand = "sh -c '/usr/local/bin/start.sh'"
+# Leave CMD from Dockerfile to control start. To force explicitly, uncomment:
+# startCommand = "sh -c '/usr/local/bin/start.sh'"

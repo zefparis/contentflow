@@ -79,6 +79,16 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# ------------------ Health Endpoints (define early) ------------------
+@app.get("/healthz", include_in_schema=False)
+@app.head("/healthz", include_in_schema=False)
+async def healthz():
+    return {"ok": True}
+
+@app.get("/health", include_in_schema=False)
+async def health():
+    return {"ok": True}
+
 # ------------------ Middleware ------------------
 # CORS
 app.add_middleware(
@@ -93,7 +103,17 @@ app.add_middleware(
 class SPAFallbackMiddleware:
     def __init__(self, app):
         self.app = app
-        self.excluded_prefixes = ["/api", "/docs", "/redoc", "/openapi.json", "/static", "/assets"]
+        self.excluded_prefixes = [
+            "/api",
+            "/docs",
+            "/redoc",
+            "/openapi.json",
+            "/static",
+            "/assets",
+            "/health",
+            "/healthz",
+            "/__feature_flags",
+        ]
         self.candidates = [
             Path("app/static"),
             Path("client/dist/public"),
@@ -130,22 +150,12 @@ class SPAFallbackMiddleware:
 
 app.add_middleware(SPAFallbackMiddleware)
 
-# ------------------ Static Frontend ------------------
+# ------------------ Static Frontend (mount last) ------------------
 for d in ["app/static", "client/dist/public", "dist/public", "dist", "public"]:
     if os.path.exists(d):
         app.mount("/", StaticFiles(directory=d, html=True), name="frontend")
         logger.info(f"📦 Mounted frontend from {d}")
         break
-
-# ------------------ Health Endpoints ------------------
-@app.get("/healthz", include_in_schema=False)
-@app.head("/healthz", include_in_schema=False)
-async def healthz():
-    return {"ok": True}
-
-@app.get("/health", include_in_schema=False)
-async def health():
-    return {"ok": True}
 
 # ------------------ Legacy Rewrite ------------------
 @app.middleware("http")
