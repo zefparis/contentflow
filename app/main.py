@@ -11,6 +11,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, HTMLResponse
+from starlette.middleware.base import BaseHTTPMiddleware
 
 # Internal imports
 from app.config import settings
@@ -100,53 +101,48 @@ app.add_middleware(
 )
 
 # SPA Fallback Middleware
-class SPAFallbackMiddleware:
+class SPAFallbackMiddleware(BaseHTTPMiddleware):
     def __init__(self, app):
-        self.app = app
+        super().__init__(app)
         self.excluded_prefixes = [
-            "/api",
-            "/docs",
-            "/redoc",
-            "/openapi.json",
-            "/static",
-            "/assets",
-            "/health",
-            "/healthz",
-            "/__feature_flags",
+            "/api", "/docs", "/redoc", "/openapi.json",
+            "/static", "/assets", "/health", "/healthz", "/__feature_flags",
         ]
-        self.candidates = [
+        candidates = [
             Path("app/static"),
             Path("client/dist/public"),
             Path("dist/public"),
             Path("dist"),
             Path("public"),
         ]
-        self.candidates = [p for p in self.candidates if p.exists()]
+        self.candidates = [p for p in candidates if p.exists()]
 
-    async def __call__(self, scope, receive, send):
-        if scope["type"] != "http":
-            return await self.app(scope, receive, send)
+    async def dispatch(self, request, call_next):
+        path = request.url.path
+        # Allow API and known prefixes
+        if any(path.startswith(p) for p in self.excluded_prefixes):
+            return await call_next(request)
 
-        request = Request(scope, receive)
+        # Let the app respond first
+        response = await call_next(request)
+        if response.status_code != 404:
+            return response
 
-        # Skip if path starts with excluded prefix
-        if any(request.url.path.startswith(p) for p in self.excluded_prefixes):
-            return await self.app(scope, receive, send)
+        # On 404, try static file by path
+        rel = path.lstrip("/")
+        for root in self.candidates:
+            fp = root / rel
+            if fp.is_file():
+                return FileResponse(fp)
 
-        # Try to serve static file first
-        path = request.url.path.lstrip("/")
-        for candidate in self.candidates:
-            file_path = candidate / path
-            if file_path.is_file():
-                return FileResponse(file_path)
+        # Fallback to SPA index.html
+        for root in self.candidates:
+            index = root / "index.html"
+            if index.exists():
+                return FileResponse(index)
 
-        # Fallback → serve index.html
-        for candidate in self.candidates:
-            index_path = candidate / "index.html"
-            if index_path.exists():
-                return FileResponse(index_path)
-
-        return await self.app(scope, receive, send)
+        # If nothing found, return original 404
+        return response
 
 app.add_middleware(SPAFallbackMiddleware)
 
