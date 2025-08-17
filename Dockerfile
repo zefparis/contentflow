@@ -10,11 +10,9 @@ COPY client ./client
 COPY shared ./shared
 COPY attached_assets ./attached_assets
 
-# Install deps and build only the Vite client (avoid running package.json build that also bundles server)
+# Install deps and build only the Vite client
 RUN npm ci --no-audit --no-fund \
  && npx vite build --config vite.config.ts
-
-# Output is dist/public as per vite.config.ts
 
 # ---------- Stage 2: Backend ----------
 FROM python:3.12-slim AS backend
@@ -48,9 +46,8 @@ COPY --from=frontend /app/dist/public/ ./app/static/
 ENV PORT=8000
 EXPOSE 8000
 
-# Healthcheck (optional)
-HEALTHCHECK --interval=30s --timeout=5s --retries=3 CMD curl -fsS http://localhost:8000/healthz || exit 1
+# Healthcheck
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 CMD curl -fsS http://localhost:${PORT:-8000}/healthz || exit 1
 
-# Start FastAPI
+# Start FastAPI (use shell so ${PORT} is expanded)
 CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
-
