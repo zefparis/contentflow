@@ -2,8 +2,9 @@
 from __future__ import annotations
 
 import os
-from pathlib import Path
 import asyncio
+import logging
+from pathlib import Path
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -16,6 +17,7 @@ from app.utils.logger import logger
 from app.aiops.autopilot import ai_tick
 
 
+# ---------- Lifespan ----------
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # --- startup ---
@@ -25,31 +27,38 @@ async def lifespan(app: FastAPI):
         logger.info("DB init OK")
     except Exception as e:
         logger.exception(f"DB init failed: {e}")
-    # Start internal AI autopilot scheduler if enabled
+
+    # Autopilot internal scheduler
     app.state.autopilot_task = None
     try:
         if getattr(settings, "FEATURE_AUTOPILOT", False):
             interval_sec = max(60, int(getattr(settings, "AI_TICK_INTERVAL_MIN", 10)) * 60)
             logger.info(f"Starting internal Autopilot scheduler (every {interval_sec}s) …")
+
             async def _autopilot_loop():
                 while True:
                     try:
                         res = ai_tick(dry_run=getattr(settings, "AI_DRY_RUN", True))
                         status = "ok" if res.get("ok") else f"err:{res.get('reason') or res.get('error')}"
-                        logger.info(f"[Autopilot] tick={status} dry={res.get('dry_run')} actions={len(res.get('executed', []))}")
+                        logger.info(
+                            f"[Autopilot] tick={status} dry={res.get('dry_run')} "
+                            f"actions={len(res.get('executed', []))}"
+                        )
                         await asyncio.sleep(interval_sec)
                     except Exception as e:
                         logger.warning(f"[Autopilot] loop error: {e}")
                         await asyncio.sleep(60)
+
             app.state.autopilot_task = asyncio.create_task(_autopilot_loop())
         else:
-            logger.info("Autopilot disabled by FEATURE_AUTOPILOT flag; internal scheduler not started.")
+            logger.info("Autopilot disabled by FEATURE_AUTOPILOT flag; scheduler not started.")
     except Exception as e:
         logger.warning(f"Failed to start internal Autopilot scheduler: {e}")
+
     yield
+
     # --- shutdown ---
     logger.info("ContentFlow shutdown complete.")
-    # Stop internal scheduler gracefully
     task = getattr(app.state, "autopilot_task", None)
     if task:
         task.cancel()
@@ -59,6 +68,7 @@ async def lifespan(app: FastAPI):
             pass
 
 
+# ---------- FastAPI App ----------
 app = FastAPI(
     title="ContentFlow",
     description="Automated Content Pipeline",
@@ -66,7 +76,8 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# ---------- Health (Railway healthcheck) ----------
+
+# ---------- Health endpoints ----------
 @app.get("/healthz", include_in_schema=False)
 @app.head("/healthz", include_in_schema=False)
 async def _healthz():
@@ -76,19 +87,17 @@ async def _healthz():
 async def _health():
     return {"ok": True}
 
-# ---------- Legacy path rewrite middleware ----------
+
+# ---------- Legacy path rewrite ----------
 @app.middleware("http")
 async def _rewrite_legacy_paths(request, call_next):
-    """Rewrite older frontend paths to current API structure.
-    - /partners/api/* => /api/*
-    - /api/ai/orchestrator/* => /api/ai/*
-    """
     path = request.url.path
     if path.startswith("/partners/api/"):
         request.scope["path"] = path.replace("/partners/api", "/api", 1)
     elif path.startswith("/api/ai/orchestrator/"):
         request.scope["path"] = path.replace("/api/ai/orchestrator", "/api/ai", 1)
     return await call_next(request)
+
 
 # ---------- Feature flags debug ----------
 @app.get("/__feature_flags", include_in_schema=False)
@@ -100,7 +109,8 @@ def _feature_flags():
         "PUBLIC_BASE_URL": getattr(settings, "PUBLIC_BASE_URL", ""),
     }
 
-# ---------- Core routers (safe include) ----------
+
+# ---------- Router helper ----------
 def _include(router, prefix: str | None = None, tags: list[str] | None = None):
     try:
         if prefix or tags:
@@ -110,7 +120,8 @@ def _include(router, prefix: str | None = None, tags: list[str] | None = None):
     except Exception as e:
         logger.warning(f"Router include failed: {e}")
 
-# Core
+
+# ---------- Core Routers ----------
 try:
     from app.routes import ui, sources, assets, posts, jobs, reports
     _include(ui.router)
@@ -123,7 +134,8 @@ try:
 except Exception as e:
     logger.exception(f"Core routers load error: {e}")
 
-# Extended (mount ce qui existe, ne crashe rien)
+
+# ---------- Extended Routers ----------
 for mod, opts in [
     ("app.routes.metrics",            {"prefix": "/api", "tags": ["metrics"]}),
     ("app.routes.publish",            {"prefix": "/api", "tags": ["publish"]}),
@@ -136,7 +148,7 @@ for mod, opts in [
     ("app.routes.partnership_routes", {}),
     ("app.routes.byop_routes",        {}),
     ("app.routes.byop_publish",       {}),
-    # API/Providers
+    # APIs
     ("app.api.contentflow_routes",    {}),
     ("app.api.supadata_routes",       {"prefix": "/api"}),
     ("app.api.brevo_routes",          {"prefix": "/api"}),
@@ -144,27 +156,23 @@ for mod, opts in [
     ("app.routes.ig_publish",         {"prefix": "/api"}),
     ("app.routes.ai_orchestrator",    {"prefix": "/api"}),
     ("app.routes.partners_ui",        {}),
-    ("app.routes.partner_auth",       {}),
+    # ✅ Correction: Partner Auth exposé sous /api/partner/*
+    ("app.routes.partner_auth",       {"prefix": "/api/partner", "tags": ["partner_auth"]}),
     ("app.routes.partners_admin",     {}),
     ("app.routes.compat",             {}),
 ]:
     try:
         modobj = __import__(mod, fromlist=["router"])
         _include(modobj.router, **opts)
-        logger.info(f"Mounted {mod}")
+        logger.info(f"Mounted {mod} with opts={opts}")
     except Exception as e:
         logger.warning(f"Skip {mod}: {e}")
 
-# ---------- Static & SPA (après les routes API) ----------
-from fastapi.staticfiles import StaticFiles
-from fastapi.responses import HTMLResponse
-from pathlib import Path
-import logging
 
+# ---------- Static & SPA ----------
 ROOT = Path(__file__).resolve().parents[1]
 STATIC_DIR = ROOT / "app" / "static"
 
-# On tente dans cet ordre : client/dist (Vite client), dist/public (build root), dist (fallback)
 CANDIDATES = [
     ROOT / "client" / "dist",
     ROOT / "dist" / "public",
@@ -205,9 +213,9 @@ if not _mounted:
             "<li><a href='/__static_debug'>/__static_debug</a></li></ul>"
         )
 
+
 # ---------- Local runner ----------
 if __name__ == "__main__":
-    # Utilisé seulement en local; en prod Railway lance via Procfile/Start Command.
     import uvicorn
     port = int(os.getenv("PORT", getattr(settings, "PORT", 8080)))
     is_dev = os.getenv("RELOAD", "0") == "1" or os.getenv("ENV", "").lower() in {"dev", "development", "local"}
