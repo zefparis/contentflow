@@ -7,8 +7,8 @@ import logging
 from pathlib import Path
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
-from fastapi.responses import HTMLResponse
+from fastapi import FastAPI, Request
+from fastapi.responses import HTMLResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.config import settings
@@ -206,14 +206,44 @@ def _static_debug():
     }
 
 @app.middleware("http")
-async def spa_fallback(request, call_next):
-    response = await call_next(request)
-    if response.status_code == 404 and not request.url.path.startswith("/api"):
-        # Fallback vers index.html du SPA
-        index_path = ROOT / "dist" / "public" / "index.html"
-        if index_path.is_file():
-            return FileResponse(index_path)
-    return response
+async def spa_fallback(request: Request, call_next):
+    # Skip API requests, static files, and documentation
+    if (request.url.path.startswith("/api") or 
+        request.url.path.startswith("/static") or
+        request.url.path.startswith("/docs") or
+        request.url.path.startswith("/redoc")):
+        return await call_next(request)
+    
+    try:
+        # First try to serve the file directly
+        response = await call_next(request)
+        
+        # If 404 and not an API request, serve the SPA
+        if response.status_code == 404:
+            for candidate in CANDIDATES:
+                # Check if the path exists as a file
+                path = request.url.path.lstrip('/')
+                file_path = candidate / path
+                
+                # If it's a directory, try index.html
+                if file_path.is_dir() and (file_path / "index.html").exists():
+                    return FileResponse(file_path / "index.html")
+                # If it's a file, serve it
+                elif file_path.is_file():
+                    return FileResponse(file_path)
+                
+                # If we're at the root, try index.html
+                if not path and (candidate / "index.html").exists():
+                    return FileResponse(candidate / "index.html")
+        
+        return response
+    except Exception as e:
+        # If any error occurs, try to serve index.html as a last resort
+        for candidate in CANDIDATES:
+            index_path = candidate / "index.html"
+            if index_path.exists():
+                return FileResponse(index_path)
+        raise  # Re-raise if no index.html is found
 
 if not _mounted:
     @app.get("/", include_in_schema=False)
