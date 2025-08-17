@@ -20,21 +20,18 @@ class MagicLinkRequest(BaseModel):
     email: str
 
 
-@router.post("/api/partner/auth/magic-link")
-def api_send_magic_link(req: MagicLinkRequest):
+async def _handle_magic_link(email: str):
     """
-    JSON API: Génère et envoie un lien magique BYOP.
-    - Body: {"email": string}
-    - Success: {"success": true}
-    - Error: {"error": string}
+    Handle magic link logic
+    Returns: (success, result_or_error)
     """
-    email = (req.email or "").lower().strip()
+    email = (email or "").lower().strip()
     if not email:
-        return JSONResponse({"error": "invalid_email"}, status_code=400)
+        return False, "invalid_email"
 
     db = SessionLocal()
     try:
-        # Créer ou récupérer le partenaire
+        # Create or get partner
         partner = db.query(Partner).filter(Partner.email == email).first()
         if not partner:
             partner = Partner(email=email)
@@ -42,14 +39,14 @@ def api_send_magic_link(req: MagicLinkRequest):
             db.commit()
             db.refresh(partner)
 
-        # Générer un token sécurisé et persister en base
+        # Generate secure token and persist
         token = secrets.token_urlsafe(32)
         expires = dt.datetime.utcnow() + dt.timedelta(minutes=15)
         ml = MagicLink(partner_id=partner.id, email=email, token=token, expires_at=expires)
         db.add(ml)
         db.commit()
 
-        # Construire l'URL de connexion
+        # Build login URL
         base_url = (
             getattr(settings, 'PUBLIC_BASE_URL', None)
             or getattr(settings, 'APP_BASE_URL', None)
@@ -57,22 +54,41 @@ def api_send_magic_link(req: MagicLinkRequest):
         )
         login_url = f"{base_url}/partner/login?token={token}"
 
-        # Vérifier configuration Brevo
+        # Check Brevo config
         if not getattr(settings, 'BREVO_API_KEY', None):
-            # Ne pas exposer la clé manquante; message générique
-            return JSONResponse({"error": "Email service not configured"}, status_code=500)
+            return False, "email_service_not_configured"
 
-        # Envoyer l'email
-        sent = send_magic_link_email(email, login_url)
-        if not sent:
-            return JSONResponse({"error": "Email send failed"}, status_code=500)
+        # Send email
+        if not send_magic_link_email(email, login_url):
+            return False, "email_send_failed"
 
-        return {"success": True}
+        return True, None
 
     except Exception as e:
-        return JSONResponse({"error": str(e)}, status_code=500)
+        return False, str(e)
     finally:
         db.close()
+
+@router.post("/api/partner/auth/magic-link")
+async def api_send_magic_link(req: MagicLinkRequest):
+    """
+    JSON API: Generate and send BYOP magic link.
+    - Body: {"email": string}
+    - Success: {"success": true}
+    - Error: {"error": string}
+    """
+    success, result = await _handle_magic_link(req.email)
+    if success:
+        return {"success": True}
+    return JSONResponse({"error": result}, status_code=500 if result != "invalid_email" else 400)
+
+# Alias for frontend compatibility
+@router.post("/api/auth/magic-link")
+async def api_send_magic_link_alias(req: MagicLinkRequest):
+    """
+    Alias for /api/partner/auth/magic-link for frontend compatibility.
+    """
+    return await api_send_magic_link(req)
 
 
 @router.post("/partner/magic")

@@ -160,6 +160,10 @@ for mod, opts in [
     ("app.routes.partner_auth",       {"prefix": "/api/partner", "tags": ["partner_auth"]}),
     ("app.routes.partners_admin",     {}),
     ("app.routes.compat",             {}),
+    
+    # Stub endpoints for frontend compatibility
+    ("app.routes.stubs",              {"prefix": "", "tags": ["stubs"]}),
+    ("app.routes.byop_stub",          {"prefix": "", "tags": ["byop"]}),
 ]:
     try:
         modobj = __import__(mod, fromlist=["router"])
