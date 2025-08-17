@@ -54,8 +54,22 @@ async def init_db():
     if insp.has_table("metric_events") and not has_column("metric_events", "timestamp"):
         add_column("metric_events", "timestamp", "DATETIME", "TIMESTAMP", "CURRENT_TIMESTAMP")
 
-    # jobs: ensure payload and attempts/status columns
+    # jobs: ensure all expected columns exist
     if insp.has_table("jobs"):
+        # Ensure idempotency_key column exists
+        if not has_column("jobs", "idempotency_key"):
+            add_column("jobs", "idempotency_key", "VARCHAR(32)", "VARCHAR(32)")
+            # Create unique index if it doesn't exist
+            with engine.begin() as conn:
+                try:
+                    if engine.dialect.name.startswith('postgresql'):
+                        conn.execute(sa.text("CREATE UNIQUE INDEX IF NOT EXISTS ix_jobs_idempotency_key ON jobs (idempotency_key)"))
+                    else:  # SQLite
+                        conn.execute(sa.text("CREATE UNIQUE INDEX IF NOT EXISTS ix_jobs_idempotency_key ON jobs (idempotency_key)"))
+                except Exception as e:
+                    logger.warning(f"Could not create idempotency_key index: {e}")
+        
+        # Ensure other required columns exist
         if not has_column("jobs", "payload"):
             # JSONB on Postgres, TEXT on SQLite
             add_column("jobs", "payload", "TEXT", "JSONB")
@@ -65,7 +79,8 @@ async def init_db():
             add_column("jobs", "status", "TEXT", "TEXT", "'queued'")
         for ts_col in ("created_at", "started_at", "completed_at"):
             if not has_column("jobs", ts_col):
-                add_column("jobs", ts_col, "DATETIME", "TIMESTAMP", "CURRENT_TIMESTAMP" if ts_col == "created_at" else None)
+                add_column("jobs", ts_col, "DATETIME", "TIMESTAMP", 
+                          "CURRENT_TIMESTAMP" if ts_col == "created_at" else None)
 
 # Backward-compat alias for older routes expecting get_session
 get_session = get_db

@@ -6,16 +6,38 @@ import asyncio
 import logging
 from pathlib import Path
 from contextlib import asynccontextmanager
-
-from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, FileResponse
+from fastapi import FastAPI, Request, Response, Depends, HTTPException, status
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import JSONResponse, FileResponse
+from typing import Optional, Dict, Any
 
+# Internal imports
 from app.config import settings
 from app.db import init_db
-from app.utils.logger import logger
 from app.aiops.autopilot import ai_tick
+from app.routes import (
+    ui,
+    sources,
+    assets,
+    posts,
+    jobs,
+    reports,
+    auth,
+    posts,
+    sources,
+    assets,
+    jobs,
+    payments,
+    partner_auth,
+    byop,
+    stubs,
+    byop_stub
+)
 
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # ---------- Lifespan ----------
 @asynccontextmanager
@@ -76,6 +98,82 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.CORS_ORIGINS if hasattr(settings, 'CORS_ORIGINS') else ["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Mount static files
+static_dirs = ["client/dist/public", "dist/public", "dist", "public"]
+for static_dir in static_dirs:
+    if os.path.exists(static_dir):
+        app.mount("/static", StaticFiles(directory=static_dir), name="static")
+        app.mount("/assets", StaticFiles(directory=os.path.join(static_dir, "assets")), name="assets")
+        break
+
+# Add SPA fallback middleware
+class SPAFallbackMiddleware:
+    def __init__(self, app):
+        self.app = app
+        self.static_dirs = [
+            Path("client/dist/public"),
+            Path("dist/public"),
+            Path("dist"),
+            Path("public")
+        ]
+        self.excluded_prefixes = [
+            "/api",
+            "/docs",
+            "/redoc",
+            "/openapi.json",
+            "/static",
+            "/assets"
+        ]
+        self.candidates = [Path(d) for d in self.static_dirs if Path(d).exists()]
+
+    async def __call__(self, scope, receive, send):
+        assert scope['type'] == 'http'
+        request = Request(scope, receive)
+        
+        # Skip middleware for excluded paths
+        if any(request.url.path.startswith(prefix) for prefix in self.excluded_prefixes):
+            return await self.app(scope, receive, send)
+        
+        # Try to serve the requested file first
+        try:
+            response = await self.app(scope, receive, send)
+            
+            # If 404 and not an API request, try to serve index.html
+            if response.status_code == 404:
+                path = request.url.path.lstrip('/')
+                for candidate in self.candidates:
+                    file_path = candidate / path
+                    
+                    # If it's a directory, try index.html
+                    if file_path.is_dir() and (file_path / "index.html").exists():
+                        return FileResponse(file_path / "index.html")
+                    # If it's a file, serve it
+                    elif file_path.is_file():
+                        return FileResponse(file_path)
+                    
+                    # If we're at the root, try index.html
+                    if not path and (candidate / "index.html").exists():
+                        return FileResponse(candidate / "index.html")
+            
+            return response
+        except Exception as e:
+            # If any error occurs, try to serve index.html as a last resort
+            for candidate in self.candidates:
+                index_path = candidate / "index.html"
+                if index_path.exists():
+                    return FileResponse(index_path)
+            raise  # Re-raise if no index.html is found
+
+app.add_middleware(SPAFallbackMiddleware)
 
 # ---------- Health endpoints ----------
 @app.get("/healthz", include_in_schema=False)
@@ -87,7 +185,6 @@ async def _healthz():
 async def _health():
     return {"ok": True}
 
-
 # ---------- Legacy path rewrite ----------
 @app.middleware("http")
 async def _rewrite_legacy_paths(request, call_next):
@@ -97,7 +194,6 @@ async def _rewrite_legacy_paths(request, call_next):
     elif path.startswith("/api/ai/orchestrator/"):
         request.scope["path"] = path.replace("/api/ai/orchestrator", "/api/ai", 1)
     return await call_next(request)
-
 
 # ---------- Feature flags debug ----------
 @app.get("/__feature_flags", include_in_schema=False)
@@ -109,7 +205,6 @@ def _feature_flags():
         "PUBLIC_BASE_URL": getattr(settings, "PUBLIC_BASE_URL", ""),
     }
 
-
 # ---------- Router helper ----------
 def _include(router, prefix: str | None = None, tags: list[str] | None = None):
     try:
@@ -119,7 +214,6 @@ def _include(router, prefix: str | None = None, tags: list[str] | None = None):
             app.include_router(router)
     except Exception as e:
         logger.warning(f"Router include failed: {e}")
-
 
 # ---------- Core Routers ----------
 try:
@@ -133,7 +227,6 @@ try:
     logger.info("Core routers mounted.")
 except Exception as e:
     logger.exception(f"Core routers load error: {e}")
-
 
 # ---------- Extended Routers ----------
 for mod, opts in [
@@ -171,79 +264,6 @@ for mod, opts in [
         logger.info(f"Mounted {mod} with opts={opts}")
     except Exception as e:
         logger.warning(f"Skip {mod}: {e}")
-
-
-# ---------- Static & SPA ----------
-ROOT = Path(__file__).resolve().parents[1]
-STATIC_DIR = ROOT / "app" / "static"
-
-CANDIDATES = [
-    ROOT / "client" / "dist",
-    ROOT / "dist" / "public",
-    ROOT / "dist",
-]
-
-log = logging.getLogger("uvicorn")
-
-if STATIC_DIR.is_dir():
-    app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
-
-_mounted = False
-for p in CANDIDATES:
-    if p.is_dir():
-        app.mount("/", StaticFiles(directory=str(p), html=True), name="spa")
-        log.info(f"[STATIC] Serving SPA from {p}")
-        _mounted = True
-        break
-
-@app.get("/__static_debug", include_in_schema=False)
-def _static_debug():
-    return {
-        "root": str(ROOT),
-        "static_dir": str(STATIC_DIR),
-        "candidates": {str(p): p.is_dir() for p in CANDIDATES},
-        "mounted": _mounted,
-    }
-
-@app.middleware("http")
-async def spa_fallback(request: Request, call_next):
-    # Skip API requests, static files, and documentation
-    if (request.url.path.startswith("/api") or 
-        request.url.path.startswith("/static") or
-        request.url.path.startswith("/docs") or
-        request.url.path.startswith("/redoc")):
-        return await call_next(request)
-    
-    try:
-        # First try to serve the file directly
-        response = await call_next(request)
-        
-        # If 404 and not an API request, serve the SPA
-        if response.status_code == 404:
-            for candidate in CANDIDATES:
-                # Check if the path exists as a file
-                path = request.url.path.lstrip('/')
-                file_path = candidate / path
-                
-                # If it's a directory, try index.html
-                if file_path.is_dir() and (file_path / "index.html").exists():
-                    return FileResponse(file_path / "index.html")
-                # If it's a file, serve it
-                elif file_path.is_file():
-                    return FileResponse(file_path)
-                
-                # If we're at the root, try index.html
-                if not path and (candidate / "index.html").exists():
-                    return FileResponse(candidate / "index.html")
-        
-        return response
-    except Exception as e:
-        # If any error occurs, try to serve index.html as a last resort
-        for candidate in CANDIDATES:
-            index_path = candidate / "index.html"
-            if index_path.exists():
-                return FileResponse(index_path)
-        raise  # Re-raise if no index.html is found
 
 if not _mounted:
     @app.get("/", include_in_schema=False)
