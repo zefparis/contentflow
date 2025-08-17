@@ -1,5 +1,6 @@
 from typing import List
 from pydantic_settings import BaseSettings
+from pydantic import field_validator
 
 
 class Settings(BaseSettings):
@@ -16,6 +17,7 @@ class Settings(BaseSettings):
     AFFIL_BASE_URL: str = "https://example.com"
     APP_BASE_URL: str = "http://localhost:5000"
     PUBLIC_BASE_URL: str = "http://localhost:5000"
+    PORT: int = 8000
 
     # --- JWT / Session ---
     JWT_SECRET: str = "your-secret-key-here"
@@ -115,6 +117,9 @@ class Settings(BaseSettings):
     # --- Logging ---
     LOG_LEVEL: str = "INFO"
 
+    # --- CORS ---
+    CORS_ORIGINS: List[str] = ["*"]
+
     # --- Helpers ---
     @property
     def META_BASE(self) -> str:
@@ -124,6 +129,24 @@ class Settings(BaseSettings):
         "env_file": ".env",
         "case_sensitive": False,
     }
+
+    # --- v2 list parsing helpers (env strings -> list[str]) ---
+    @field_validator(
+        "PAYOUT_METHODS",
+        "BYOP_PUBLISH_PLATFORMS",
+        "AFF_ALLOWLIST_IPS",
+        "CORS_ORIGINS",
+        mode="before",
+    )
+    @classmethod
+    def _split_csv(cls, v):
+        if isinstance(v, list):
+            return v
+        if v is None or v == "":
+            return []
+        if isinstance(v, str):
+            return [s.strip() for s in v.split(",") if s.strip()]
+        return v
 
 
 settings = Settings()

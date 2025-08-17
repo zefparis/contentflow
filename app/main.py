@@ -9,7 +9,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, Response, Depends, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import JSONResponse, FileResponse
+from fastapi.responses import JSONResponse, FileResponse, HTMLResponse
 from typing import Optional, Dict, Any
 
 # Internal imports
@@ -107,12 +107,21 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Mount static files
-static_dirs = ["client/dist/public", "dist/public", "dist", "public"]
-for static_dir in static_dirs:
-    if os.path.exists(static_dir):
-        app.mount("/static", StaticFiles(directory=static_dir), name="static")
-        app.mount("/assets", StaticFiles(directory=os.path.join(static_dir, "assets")), name="assets")
+# Mount built frontend if available (served as root)
+frontend_dir_candidates = [
+    "app/static",
+    "client/dist/public",
+    "dist/public",
+    "dist",
+    "public",
+]
+_static_root_mounted = False
+for d in frontend_dir_candidates:
+    if os.path.exists(d):
+        # Serve SPA with index.html
+        app.mount("/", StaticFiles(directory=d, html=True), name="static-root")
+        _static_root_mounted = True
+        logger.info(f"Mounted frontend static root at '{d}'")
         break
 
 # Add SPA fallback middleware
@@ -120,10 +129,11 @@ class SPAFallbackMiddleware:
     def __init__(self, app):
         self.app = app
         self.static_dirs = [
+            Path("app/static"),
             Path("client/dist/public"),
             Path("dist/public"),
             Path("dist"),
-            Path("public")
+            Path("public"),
         ]
         self.excluded_prefixes = [
             "/api",
@@ -146,9 +156,8 @@ class SPAFallbackMiddleware:
         # Try to serve the requested file first
         try:
             response = await self.app(scope, receive, send)
-            
             # If 404 and not an API request, try to serve index.html
-            if response.status_code == 404:
+            if hasattr(response, "status_code") and response.status_code == 404:
                 path = request.url.path.lstrip('/')
                 for candidate in self.candidates:
                     file_path = candidate / path
@@ -216,6 +225,7 @@ def _include(router, prefix: str | None = None, tags: list[str] | None = None):
         logger.warning(f"Router include failed: {e}")
 
 # ---------- Core Routers ----------
+_mounted = False
 try:
     from app.routes import ui, sources, assets, posts, jobs, reports
     _include(ui.router)
@@ -225,6 +235,7 @@ try:
     _include(jobs.router,    prefix="/api")
     _include(reports.router, prefix="/api")
     logger.info("Core routers mounted.")
+    _mounted = True
 except Exception as e:
     logger.exception(f"Core routers load error: {e}")
 
@@ -262,6 +273,7 @@ for mod, opts in [
         modobj = __import__(mod, fromlist=["router"])
         _include(modobj.router, **opts)
         logger.info(f"Mounted {mod} with opts={opts}")
+        _mounted = True
     except Exception as e:
         logger.warning(f"Skip {mod}: {e}")
 
