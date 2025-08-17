@@ -12,6 +12,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, HTMLResponse
 from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request as StarletteRequest
+from starlette.responses import Response
 
 # Internal imports
 from app.config import settings
@@ -144,6 +146,27 @@ class SPAFallbackMiddleware(BaseHTTPMiddleware):
         # If nothing found, return original 404
         return response
 
+class LegacyRewriteMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: StarletteRequest, call_next):
+        # Only handle HTTP (not websockets)
+        if request.scope.get("type") != "http":
+            return await call_next(request)
+
+        path = request.url.path
+        # legacy -> new routes
+        if path.startswith("/partners/api/"):
+            request.scope["path"] = path.replace("/partners/api", "/api", 1)
+        elif path.startswith("/api/ai/orchestrator/"):
+            request.scope["path"] = path.replace("/api/ai/orchestrator", "/api/ai", 1)
+
+        # propagate and guarantee a Response
+        resp = await call_next(request)
+        if resp is None:
+            return Response(status_code=404)
+        return resp
+
+# Order matters: legacy rewrite first, then SPA fallback
+app.add_middleware(LegacyRewriteMiddleware)
 app.add_middleware(SPAFallbackMiddleware)
 
 # ------------------ Static Frontend (mount last) ------------------
@@ -153,15 +176,7 @@ for d in ["app/static", "client/dist/public", "dist/public", "dist", "public"]:
         logger.info(f"📦 Mounted frontend from {d}")
         break
 
-# ------------------ Legacy Rewrite ------------------
-@app.middleware("http")
-async def legacy_rewrite(request, call_next):
-    path = request.url.path
-    if path.startswith("/partners/api/"):
-        request.scope["path"] = path.replace("/partners/api", "/api", 1)
-    elif path.startswith("/api/ai/orchestrator/"):
-        request.scope["path"] = path.replace("/api/ai/orchestrator", "/api/ai", 1)
-    return await call_next(request)
+# ------------------ Legacy Rewrite (replaced by middleware class above) ------------------
 
 # ------------------ Feature Flags Debug ------------------
 @app.get("/__feature_flags", include_in_schema=False)
