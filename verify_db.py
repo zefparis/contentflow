@@ -128,6 +128,55 @@ def setup_database():
             else:
                 print_success("Index on 'idempotency_key' already exists")
         
+        # Check if runs table exists
+        if not check_table_exists(conn, 'runs'):
+            print("\nCreating 'runs' table...")
+            with conn.cursor() as cur:
+                cur.execute("""
+                    CREATE TABLE public.runs (
+                        id SERIAL PRIMARY KEY,
+                        status VARCHAR(20) DEFAULT 'pending',
+                        kind VARCHAR(50),
+                        details TEXT,
+                        started_at TIMESTAMP WITH TIME ZONE,
+                        completed_at TIMESTAMP WITH TIME ZONE,
+                        error TEXT,
+                        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+                        updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+                    );
+                    
+                    CREATE INDEX idx_runs_status ON public.runs (status);
+                    CREATE INDEX idx_runs_kind ON public.runs (kind);
+                    CREATE INDEX idx_runs_created_at ON public.runs (created_at);
+                    
+                    COMMENT ON TABLE public.runs IS 'Tracks execution runs of various jobs';
+                    COMMENT ON COLUMN public.runs.status IS 'pending, running, completed, failed';
+                    COMMENT ON COLUMN public.runs.kind IS 'Type of run (import, export, publish, etc.)';
+                    COMMENT ON COLUMN public.runs.details IS 'JSON details about the run';
+                """)
+                print_success("'runs' table created successfully with indexes")
+        else:
+            print_success("'runs' table already exists")
+            
+            # Verify runs table structure
+            with conn.cursor() as cur:
+                print("\nChecking 'runs' table structure...")
+                cur.execute("""
+                    SELECT column_name, data_type, is_nullable
+                    FROM information_schema.columns
+                    WHERE table_name = 'runs'
+                    ORDER BY ordinal_position;
+                """)
+                columns = cur.fetchall()
+                print("\n'runs' table structure:")
+                for col in columns:
+                    print(f"   - {col[0]}: {col[1]} (Nullable: {col[2]})")
+                
+                # Check record count
+                cur.execute("SELECT COUNT(*) FROM runs")
+                count = cur.fetchone()[0]
+                print(f"\n'runs' table has {count} records")
+        
         return True
         
     except Exception as e:

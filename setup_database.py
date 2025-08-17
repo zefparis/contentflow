@@ -105,6 +105,86 @@ def setup_database():
             else:
                 print_success("Index on 'idempotency_key' already exists")
             
+            # Check and create runs table if it doesn't exist
+            if not check_table_exists(conn, 'runs'):
+                print("\nCreating 'runs' table...")
+                cur.execute("""
+                    CREATE TABLE public.runs (
+                        id SERIAL PRIMARY KEY,
+                        status VARCHAR(20) DEFAULT 'pending',
+                        kind VARCHAR(50),
+                        details TEXT,
+                        started_at TIMESTAMP WITH TIME ZONE,
+                        completed_at TIMESTAMP WITH TIME ZONE,
+                        error TEXT,
+                        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+                        updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+                    );
+                    
+                    CREATE INDEX idx_runs_status ON public.runs (status);
+                    CREATE INDEX idx_runs_kind ON public.runs (kind);
+                    CREATE INDEX idx_runs_created_at ON public.runs (created_at);
+                    
+                    COMMENT ON TABLE public.runs IS 'Tracks execution runs of various jobs';
+                    COMMENT ON COLUMN public.runs.status IS 'pending, running, completed, failed';
+                    COMMENT ON COLUMN public.runs.kind IS 'Type of run (import, export, publish, etc.)';
+                    COMMENT ON COLUMN public.runs.details IS 'JSON details about the run';
+                """)
+                print_success("'runs' table created successfully with indexes")
+            else:
+                print_success("'runs' table already exists")
+                
+                # Verify runs table structure
+                cur.execute("""
+                    SELECT column_name, data_type, is_nullable
+                    FROM information_schema.columns
+                    WHERE table_name = 'runs'
+                    ORDER BY ordinal_position;
+                """)
+                columns = cur.fetchall()
+                print("\n'runs' table structure:")
+                for col in columns:
+                    print(f"   - {col[0]}: {col[1]} (Nullable: {col[2]})")
+                
+                # Check if we need to add any missing columns
+                required_columns = {
+                    'id', 'status', 'kind', 'details', 'started_at', 
+                    'completed_at', 'error', 'created_at', 'updated_at'
+                }
+                existing_columns = {col[0] for col in columns}
+                missing_columns = required_columns - existing_columns
+                
+                if missing_columns:
+                    print(f"\nAdding missing columns to 'runs' table: {', '.join(missing_columns)}")
+                    for column in missing_columns:
+                        if column == 'id':
+                            continue  # Skip primary key
+                            
+                        data_type = 'VARCHAR(50)'
+                        if column in ('details', 'error'):
+                            data_type = 'TEXT'
+                        elif column in ('started_at', 'completed_at', 'created_at', 'updated_at'):
+                            data_type = 'TIMESTAMP WITH TIME ZONE'
+                        elif column == 'status':
+                            data_type = 'VARCHAR(20)'
+                        
+                        try:
+                            if column in ('created_at', 'updated_at'):
+                                default = "DEFAULT NOW()"
+                            elif column == 'status':
+                                default = "DEFAULT 'pending'::character varying"
+                            else:
+                                default = ""
+                                
+                            cur.execute(f"""
+                                ALTER TABLE public.runs 
+                                ADD COLUMN {column} {data_type} {default};
+                            """)
+                            print_success(f"Added column '{column}' to 'runs' table")
+                        except Exception as e:
+                            print_error(f"Failed to add column '{column}': {e}")
+                            conn.rollback()
+            
             return True
             
     except Exception as e:

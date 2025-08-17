@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Database Connection Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            line-height: 1.6;
+        }
+        .success { color: green; }
+        .error { color: red; }
+        pre {
+            background: #f4f4f4;
+            padding: 10px;
+            border-radius: 5px;
+            overflow-x: auto;
+        }
+        button {
+            padding: 10px 15px;
+            background: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            margin: 10px 0;
+        }
+        button:hover {
+            background: #45a049;
+        }
+        #output {
+            margin-top: 20px;
+            padding: 15px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            min-height: 100px;
+            background: #f9f9f9;
+        }
+    </style>
+</head>
+<body>
+    <h1>Database Connection Test</h1>
+    <p>This page will test the connection to your PostgreSQL database.</p>
+    
+    <div>
+        <button onclick="testConnection()">Test Database Connection</button>
+    </div>
+    
+    <div id="output">Click the button above to test the connection...</div>
+    
+    <script>
+        function log(message, className = '') {
+            const output = document.getElementById('output');
+            const p = document.createElement('p');
+            p.className = className;
+            p.textContent = message;
+            output.appendChild(p);
+            console.log(message);
+        }
+        
+        async function testConnection() {
+            const output = document.getElementById('output');
+            output.innerHTML = '<p>Testing connection to database...</p>';
+            
+            try {
+                // First, test if we can connect to the FastAPI server
+                log('Testing connection to FastAPI server...');
+                const apiResponse = await fetch('http://localhost:8000/test-db');
+                
+                if (!apiResponse.ok) {
+                    throw new Error(`HTTP error! status: ${apiResponse.status}`);
+                }
+                
+                const data = await apiResponse.json();
+                log(`✅ Successfully connected to FastAPI server: ${JSON.stringify(data, null, 2)}`, 'success');
+                
+                // Test the runs endpoint
+                log('\nTesting runs table...');
+                const runsResponse = await fetch('http://localhost:8000/test-runs');
+                
+                if (!runsResponse.ok) {
+                    throw new Error(`HTTP error! status: ${runsResponse.status}`);
+                }
+                
+                const runsData = await runsResponse.json();
+                log(`✅ Successfully retrieved runs data: ${JSON.stringify(runsData, null, 2)}`, 'success');
+                
+            } catch (error) {
+                log(`❌ Error: ${error.message}`, 'error');
+                log('\nTroubleshooting steps:', 'error');
+                log('1. Make sure the FastAPI server is running', 'error');
+                log('2. Check if the database server is accessible', 'error');
+                log('3. Verify the connection parameters in the FastAPI application', 'error');
+                log('4. Check the browser console for detailed error messages', 'error');
+                
+                // Log the full error to console
+                console.error('Full error details:', error);
+            }
+        }
+    </script>
+</body>
+</html>

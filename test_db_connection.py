@@ -1,6 +1,6 @@
 import os
 import sys
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, text, inspect
 from sqlalchemy.exc import SQLAlchemyError
 
 def test_connection():
@@ -62,6 +62,73 @@ def test_connection():
                     print("❌ 'idempotency_key' column is missing from jobs table")
             else:
                 print("❌ 'jobs' table does not exist")
+                
+            # Check if runs table exists
+            result = conn.execute(text("""
+                SELECT EXISTS (
+                    SELECT FROM information_schema.tables 
+                    WHERE table_schema = 'public' 
+                    AND table_name = 'runs'
+                );
+            """))
+            
+            if result.scalar():
+                print("✅ 'runs' table exists")
+                
+                # Get runs table structure
+                print("\n'runs' table structure:")
+                columns = conn.execute(text("""
+                    SELECT column_name, data_type, is_nullable
+                    FROM information_schema.columns
+                    WHERE table_name = 'runs'
+                    ORDER BY ordinal_position;
+                """))
+                columns = columns.fetchall()
+                for col in columns:
+                    print(f"   - {col[0]}: {col[1]} (Nullable: {col[2]})")
+                
+                # Get record count
+                count = conn.execute(text("SELECT COUNT(*) FROM runs")).scalar()
+                print(f"\n'runs' table has {count} records")
+                
+            else:
+                print("❌ 'runs' table does not exist")
+                
+                # Check if we can create the table
+                try:
+                    print("\nAttempting to create 'runs' table...")
+                    conn.execute(text("""
+                        CREATE TABLE runs (
+                            id SERIAL PRIMARY KEY,
+                            status VARCHAR(20) DEFAULT 'pending',
+                            kind VARCHAR(50),
+                            details TEXT,
+                            started_at TIMESTAMP,
+                            completed_at TIMESTAMP,
+                            error TEXT,
+                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                        );
+                        
+                        CREATE INDEX idx_runs_status ON runs(status);
+                        CREATE INDEX idx_runs_kind ON runs(kind);
+                        CREATE INDEX idx_runs_created_at ON runs(created_at);
+                        
+                        COMMENT ON TABLE runs IS 'Tracks execution runs of various jobs';
+                        COMMENT ON COLUMN runs.status IS 'pending, running, completed, failed';
+                        COMMENT ON COLUMN runs.kind IS 'Type of run (import, export, publish, etc.)';
+                        COMMENT ON COLUMN runs.details IS 'JSON details about the run';
+                    """))
+                    print("✅ Successfully created 'runs' table with indexes")
+                    
+                    # Verify the table was created
+                    result = conn.execute(text("""
+                        SELECT COUNT(*) FROM runs;
+                    """))
+                    print(f"'runs' table now has {result.scalar()} records")
+                    
+                except Exception as e:
+                    print(f"❌ Failed to create 'runs' table: {e}")
         
         return True
         
