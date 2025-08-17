@@ -2,7 +2,7 @@ import json
 from sqlalchemy.orm import Session
 from app.models import Post, Link
 from app.utils.logger import logger
-from app.services.compliance import calculate_risk_score
+from app.services.risk import calculate_risk_score
 from app.utils.bandit import bandit
 
 
