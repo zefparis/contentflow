@@ -205,6 +205,16 @@ def _static_debug():
         "mounted": _mounted,
     }
 
+@app.middleware("http")
+async def spa_fallback(request, call_next):
+    response = await call_next(request)
+    if response.status_code == 404 and not request.url.path.startswith("/api"):
+        # Fallback vers index.html du SPA
+        index_path = ROOT / "dist" / "public" / "index.html"
+        if index_path.is_file():
+            return FileResponse(index_path)
+    return response
+
 if not _mounted:
     @app.get("/", include_in_schema=False)
     async def _root():

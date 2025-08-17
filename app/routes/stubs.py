@@ -15,6 +15,11 @@ async def get_posts():
 async def get_sources():
     return []
 
+@router.get("/api/jobs")
+def list_jobs():
+    # Stub vide pour satisfaire frontend
+    return []
+
 @router.get("/api/jobs/status")
 async def get_jobs_status():
     return {"status": "ok", "running": 0}

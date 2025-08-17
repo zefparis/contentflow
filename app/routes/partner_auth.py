@@ -1,13 +1,13 @@
 from fastapi import APIRouter, Form, Request, Query
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, EmailStr
 from app.db import SessionLocal
 from app.models import Partner, MagicLink
 from app.services.brevo_auth import (
-    generate_magic_token, 
-    validate_magic_token, 
+    generate_magic_token,
+    validate_magic_token,
     cleanup_magic_token,
-    send_magic_link_email
+    send_magic_link_email,
 )
 from app.config import settings
 import datetime as dt
@@ -16,14 +16,20 @@ import secrets
 router = APIRouter(tags=["partner_auth"])
 
 
+# ----------------------------
+# Schemas
+# ----------------------------
 class MagicLinkRequest(BaseModel):
-    email: str
+    email: EmailStr
 
 
-async def _handle_magic_link(email: str):
+# ----------------------------
+# Helpers
+# ----------------------------
+async def _handle_magic_link(email: str) -> tuple[bool, str | None]:
     """
-    Handle magic link logic
-    Returns: (success, result_or_error)
+    Handle magic link creation + email send
+    Returns: (success, error_message_or_dev_link)
     """
     email = (email or "").lower().strip()
     if not email:
@@ -39,174 +45,112 @@ async def _handle_magic_link(email: str):
             db.commit()
             db.refresh(partner)
 
-        # Generate secure token and persist
+        # Generate secure token and persist in DB
         token = secrets.token_urlsafe(32)
         expires = dt.datetime.utcnow() + dt.timedelta(minutes=15)
-        ml = MagicLink(partner_id=partner.id, email=email, token=token, expires_at=expires)
+        ml = MagicLink(
+            partner_id=partner.id, email=email, token=token, expires_at=expires
+        )
         db.add(ml)
         db.commit()
 
         # Build login URL
         base_url = (
-            getattr(settings, 'PUBLIC_BASE_URL', None)
-            or getattr(settings, 'APP_BASE_URL', None)
-            or 'http://localhost:5000'
+            getattr(settings, "PUBLIC_BASE_URL", None)
+            or getattr(settings, "APP_BASE_URL", None)
+            or "http://localhost:5000"
         )
         login_url = f"{base_url}/partner/login?token={token}"
 
         # Check Brevo config
-        if not getattr(settings, 'BREVO_API_KEY', None):
-            return False, "email_service_not_configured"
+        if not getattr(settings, "BREVO_API_KEY", None):
+            # Pas de Brevo → fallback dev
+            return True, login_url
 
-        # Send email
+        # Send email via Brevo
         if not send_magic_link_email(email, login_url):
             return False, "email_send_failed"
 
         return True, None
-
     except Exception as e:
         return False, str(e)
     finally:
         db.close()
 
+
+# ----------------------------
+# JSON APIs
+# ----------------------------
 @router.post("/api/partner/auth/magic-link")
 async def api_send_magic_link(req: MagicLinkRequest):
-    """
-    JSON API: Generate and send BYOP magic link.
-    - Body: {"email": string}
-    - Success: {"success": true}
-    - Error: {"error": string}
-    """
+    """JSON API pour générer et envoyer un magic link"""
     success, result = await _handle_magic_link(req.email)
     if success:
         return {"success": True}
-    return JSONResponse({"error": result}, status_code=500 if result != "invalid_email" else 400)
+    return JSONResponse(
+        {"error": result}, status_code=500 if result != "invalid_email" else 400
+    )
 
-# Alias for frontend compatibility
+
 @router.post("/api/auth/magic-link")
 async def api_send_magic_link_alias(req: MagicLinkRequest):
-    """
-    Alias for /api/partner/auth/magic-link for frontend compatibility.
-    """
+    """Alias pour compat frontend"""
     return await api_send_magic_link(req)
 
 
+# ----------------------------
+# Legacy HTML form (partners UI)
+# ----------------------------
 @router.post("/partner/magic")
-def send_magic_link(email: str = Form(...)):
-    """Envoie un lien magique pour l'authentification partenaire."""
-    db = SessionLocal()
-    try:
-        # Créer ou récupérer le partenaire
-        partner = db.query(Partner).filter(Partner.email == email.lower().strip()).first()
-        if not partner:
-            partner = Partner(email=email.lower().strip())
-            db.add(partner)
-            db.commit()
-        
-        # Générer un token sécurisé
-        token = generate_magic_token(partner.id, email)
-        
-        # Construire le lien complet
-        # Utilise PUBLIC_BASE_URL si défini, sinon APP_BASE_URL, sinon fallback local
-        base_url = (
-            getattr(settings, 'PUBLIC_BASE_URL', None)
-            or getattr(settings, 'APP_BASE_URL', None)
-            or 'http://localhost:5000'
-        )
-        magic_link = f"{base_url}/partner/login?token={token}"
-        
-        # Tenter d'envoyer par email via Brevo
-        email_sent = send_magic_link_email(email, magic_link)
-        
-        # Réponse adaptée selon le succès de l'envoi
-        if email_sent:
-            html = f"""
-            <!DOCTYPE html>
-            <html>
-            <head>
-                <title>Email envoyé avec succès</title>
-                <style>
-                    body {{ font-family: system-ui; max-width: 600px; margin: 40px auto; padding: 20px; text-align: center; }}
-                    .success {{ background: #d4edda; color: #155724; padding: 20px; border-radius: 8px; margin: 20px 0; }}
-                    .instructions {{ background: #e7f3ff; color: #0c5460; padding: 15px; border-radius: 8px; margin: 20px 0; }}
-                    a {{ color: #007bff; text-decoration: none; font-weight: bold; }}
-                </style>
-            </head>
-            <body>
-                <h1>📧 Email envoyé avec succès</h1>
-                
-                <div class="success">
-                    <p>Un lien d'accès sécurisé a été envoyé à <strong>{email}</strong></p>
-                    <p>Vérifiez votre boîte de réception et votre dossier spam.</p>
-                </div>
-                
-                <div class="instructions">
-                    <h3>Prochaines étapes :</h3>
-                    <ol style="text-align: left; max-width: 400px; margin: 0 auto;">
-                        <li>Ouvrez votre email</li>
-                        <li>Cliquez sur le bouton d'accès</li>
-                        <li>Accédez à votre portail partenaire</li>
-                    </ol>
-                    <p><small>Le lien expire dans 15 minutes pour votre sécurité.</small></p>
-                </div>
-                
-                <p><a href="/partners">← Retour à l'accueil</a></p>
-            </body>
-            </html>
-            """
-        else:
-            # Fallback en mode développement
-            html = f"""
-            <!DOCTYPE html>
-            <html>
-            <head>
-                <title>Mode développement</title>
-                <style>
-                    body {{ font-family: system-ui; max-width: 600px; margin: 40px auto; padding: 20px; text-align: center; }}
-                    .warning {{ background: #fff3cd; color: #856404; padding: 20px; border-radius: 8px; margin: 20px 0; }}
-                    .link {{ background: #f8f9fa; padding: 15px; border-radius: 8px; margin: 20px 0; }}
-                    a {{ color: #007bff; text-decoration: none; font-weight: bold; }}
-                </style>
-            </head>
-            <body>
-                <h1>⚠️ Mode développement</h1>
-                
-                <div class="warning">
-                    <p>L'email n'a pas pu être envoyé (configuration Brevo manquante)</p>
-                    <p>Voici votre lien d'accès temporaire pour <strong>{email}</strong></p>
-                </div>
-                
-                <div class="link">
-                    <p><strong>Lien de développement (15 min):</strong></p>
-                    <a href="/partner/login?token={token}">Accéder au portail partenaire</a>
-                </div>
-                
-                <p><a href="/partners">← Retour à l'accueil</a></p>
-            </body>
-            </html>
-            """
-        
+async def send_magic_link(email: str = Form(...)):
+    """Envoie un magic link via formulaire HTML"""
+    success, result = await _handle_magic_link(email)
+    if success and (result is None):
+        # Email envoyé via Brevo
+        html = f"""
+        <h1>📧 Email envoyé</h1>
+        <p>Un lien d'accès a été envoyé à <b>{email}</b>.</p>
+        <p>Vérifiez votre boîte de réception (et vos spams).</p>
+        <a href="/partners">← Retour</a>
+        """
         return HTMLResponse(html)
-        
-    finally:
-        db.close()
+
+    if success and result:  # Fallback dev: afficher le lien
+        html = f"""
+        <h1>⚠️ Mode développement</h1>
+        <p>Brevo non configuré, voici ton lien temporaire :</p>
+        <a href="{result}">{result}</a>
+        """
+        return HTMLResponse(html)
+
+    return HTMLResponse(
+        f"<h3>Erreur</h3><p>{result}</p><a href='/partners'>Retour</a>",
+        status_code=400,
+    )
 
 
+# ----------------------------
+# Login + Portal
+# ----------------------------
 @router.get("/partner/login")
 def partner_login(token: str = Query(...)):
-    """Authentifie un partenaire via token magique (DB d'abord, fallback mémoire)."""
+    """Valide un magic link et redirige vers le portail partenaire"""
     db = SessionLocal()
     partner_id = None
+    now = dt.datetime.utcnow()
     try:
-        # 1) Vérifier le token persistant
-        ml = db.query(MagicLink).filter(MagicLink.token == token, MagicLink.used == False).first()
-        now = dt.datetime.utcnow()
+        # 1) Vérifier token DB
+        ml = (
+            db.query(MagicLink)
+            .filter(MagicLink.token == token, MagicLink.used == False)
+            .first()
+        )
         if ml and ml.expires_at and ml.expires_at > now:
             partner_id = ml.partner_id
             ml.used = True
             db.commit()
         else:
-            # 2) Fallback sur le token en mémoire (compat)
+            # 2) Fallback mémoire
             token_data = validate_magic_token(token)
             if token_data:
                 partner_id = token_data["partner_id"]
@@ -214,158 +158,166 @@ def partner_login(token: str = Query(...)):
 
         if not partner_id:
             return HTMLResponse(
-                """
-                <h3>🔗 Lien invalide</h3>
-                <p>Ce lien est invalide ou a expiré.</p>
-                <p><a href='/partners'>← Retour à l'accueil</a></p>
-                """,
+                "<h3>❌ Lien invalide ou expiré</h3><a href='/partners'>Retour</a>",
                 status_code=400,
             )
 
-        # Mettre à jour last_login
+        # Update last_login
         partner = db.query(Partner).filter(Partner.id == partner_id).first()
         if partner:
             partner.last_login = now
             db.commit()
-
     finally:
         db.close()
 
-    # Rediriger vers le portail avec cookie
-    response = RedirectResponse("/partner/portal", status_code=303)
-    response.set_cookie(
-        "partner_id",
-        partner_id,
-        max_age=86400 * 7,  # 7 jours
-        httponly=True,
-    )
-    return response
+    resp = RedirectResponse("/partner/portal", status_code=303)
+    resp.set_cookie("partner_id", partner_id, max_age=86400 * 7, httponly=True)
+    return resp
 
 
 @router.get("/partner/portal")
 def partner_portal(request: Request):
-    """Portail principal du partenaire."""
+    """Portail partenaire stylé"""
     pid = request.cookies.get("partner_id")
     if not pid:
         return RedirectResponse("/partners")
-    
+
     db = SessionLocal()
     try:
         partner = db.query(Partner).filter(Partner.id == pid).first()
         if not partner:
             return RedirectResponse("/partners")
-        
+
         html = f"""
         <!DOCTYPE html>
         <html>
         <head>
             <title>Portail Partenaire — ContentFlow</title>
             <style>
-                body {{ font-family: system-ui; max-width: 800px; margin: 40px auto; padding: 20px; }}
-                .welcome {{ background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 30px; border-radius: 12px; text-align: center; }}
-                .nav {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; margin: 30px 0; }}
-                .nav-item {{ background: white; padding: 25px; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); text-align: center; text-decoration: none; color: inherit; }}
-                .nav-item:hover {{ transform: translateY(-2px); box-shadow: 0 4px 12px rgba(0,0,0,0.15); }}
-                .nav-icon {{ font-size: 2em; margin-bottom: 10px; }}
-                .nav-title {{ font-weight: bold; margin-bottom: 5px; }}
-                .nav-desc {{ color: #666; font-size: 0.9em; }}
+                body {{ font-family: system-ui, sans-serif; background: #f4f6f8; margin:0; padding:0; }}
+                header {{ background: #4f46e5; color: white; padding: 20px; text-align: center; }}
+                header h1 {{ margin: 0; }}
+                .container {{ max-width: 900px; margin: 40px auto; padding: 20px; }}
+                .card-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(220px,1fr)); gap: 20px; }}
+                .card {{ background: white; padding: 25px; border-radius: 12px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); text-align: center; transition: all .2s; text-decoration:none; color: inherit; }}
+                .card:hover {{ transform: translateY(-4px); box-shadow: 0 4px 14px rgba(0,0,0,0.15); }}
+                .icon {{ font-size: 2.5em; margin-bottom: 10px; }}
+                .title {{ font-weight: bold; font-size: 1.2em; margin-bottom: 5px; }}
+                .desc {{ color: #666; font-size: 0.9em; }}
+                footer {{ text-align:center; padding:20px; font-size:0.9em; color:#777; }}
+                a.logout {{ color: #e11d48; font-weight:bold; }}
             </style>
         </head>
         <body>
-            <div class="welcome">
-                <h1>🎉 Bienvenue dans ton portail partenaire</h1>
-                <p>Connecté en tant que <strong>{partner.email}</strong></p>
+            <header>
+                <h1>🎉 Bienvenue {partner.email}</h1>
+                <p>Portail Partenaire ContentFlow</p>
+            </header>
+            
+            <div class="container">
+                <div class="card-grid">
+                    <a href="/partners/earnings" class="card">
+                        <div class="icon">💰</div>
+                        <div class="title">Mes Revenus</div>
+                        <div class="desc">Solde, historique, retraits</div>
+                    </a>
+                    
+                    <a href="/partners/leaderboard" class="card">
+                        <div class="icon">🏆</div>
+                        <div class="title">Leaderboard</div>
+                        <div class="desc">Classement performances</div>
+                    </a>
+                    
+                    <a href="/partners/faq" class="card">
+                        <div class="icon">❓</div>
+                        <div class="title">FAQ</div>
+                        <div class="desc">Questions fréquentes</div>
+                    </a>
+                    
+                    <a href="/partner/settings" class="card">
+                        <div class="icon">⚙️</div>
+                        <div class="title">Paramètres</div>
+                        <div class="desc">Configuration du compte</div>
+                    </a>
+                </div>
             </div>
             
-            <div class="nav">
-                <a href="/partners/earnings" class="nav-item">
-                    <div class="nav-icon">💰</div>
-                    <div class="nav-title">Mes Revenus</div>
-                    <div class="nav-desc">Solde, historique, retraits</div>
-                </a>
-                
-                <a href="/partners/leaderboard" class="nav-item">
-                    <div class="nav-icon">🏆</div>
-                    <div class="nav-title">Leaderboard</div>
-                    <div class="nav-desc">Classement performances</div>
-                </a>
-                
-                <a href="/partners/faq" class="nav-item">
-                    <div class="nav-icon">❓</div>
-                    <div class="nav-title">FAQ</div>
-                    <div class="nav-desc">Questions fréquentes</div>
-                </a>
-                
-                <a href="/partner/settings" class="nav-item">
-                    <div class="nav-icon">⚙️</div>
-                    <div class="nav-title">Paramètres</div>
-                    <div class="nav-desc">Configuration compte</div>
-                </a>
-            </div>
-            
-            <p style="text-align: center; margin-top: 30px;">
-                <a href="/partners">🏠 Accueil partenaires</a> | 
-                <a href="/partner/logout">🚪 Déconnexion</a>
-            </p>
+            <footer>
+                <a href="/partners">🏠 Accueil</a> • 
+                <a href="/partner/logout" class="logout">🚪 Déconnexion</a>
+            </footer>
         </body>
         </html>
         """
-        
         return HTMLResponse(html)
-        
     finally:
         db.close()
 
-
 @router.get("/partner/settings")
 def partner_settings(request: Request):
-    """Page paramètres du partenaire."""
+    """Page paramètres du partenaire (UI moderne)"""
     pid = request.cookies.get("partner_id")
     if not pid:
         return RedirectResponse("/partners")
-    
+
     html = """
     <!DOCTYPE html>
     <html>
     <head>
         <title>Paramètres — Partenaire ContentFlow</title>
         <style>
-            body { font-family: system-ui; max-width: 600px; margin: 40px auto; padding: 20px; }
-            .setting { background: white; padding: 20px; margin: 15px 0; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+            body { font-family: system-ui, sans-serif; background: #f4f6f8; margin:0; padding:0; }
+            header { background: #4f46e5; color: white; padding: 20px; text-align: center; }
+            header h1 { margin: 0; }
+            .container { max-width: 800px; margin: 40px auto; padding: 20px; }
+            .card { background: white; padding: 25px; border-radius: 12px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); margin-bottom: 20px; }
+            .card h2 { margin-top: 0; color: #111827; }
+            .card p { color: #555; }
+            .actions button { margin: 5px; padding: 10px 15px; border: none; border-radius: 6px; cursor: pointer; }
+            .actions button:disabled { background: #e5e7eb; color: #9ca3af; cursor: not-allowed; }
+            footer { text-align:center; padding:20px; font-size:0.9em; color:#777; }
+            a.back { color:#4f46e5; font-weight:bold; text-decoration:none; }
         </style>
     </head>
     <body>
-        <h1>⚙️ Paramètres du compte</h1>
-        
-        <div class="setting">
-            <h3>🔗 Comptes connectés</h3>
-            <p>Gestion des comptes sociaux connectés (à implémenter)</p>
-            <button disabled>Instagram</button>
-            <button disabled>TikTok</button>
-            <button disabled>YouTube</button>
+        <header>
+            <h1>⚙️ Paramètres Partenaire</h1>
+        </header>
+
+        <div class="container">
+            <div class="card">
+                <h2>🔗 Comptes connectés</h2>
+                <p>Gère tes réseaux sociaux connectés (à venir).</p>
+                <div class="actions">
+                    <button disabled>Instagram</button>
+                    <button disabled>TikTok</button>
+                    <button disabled>YouTube</button>
+                </div>
+            </div>
+
+            <div class="card">
+                <h2>📝 Préférences de publication</h2>
+                <p>Configure les types de contenu et fréquence (à venir).</p>
+            </div>
+
+            <div class="card">
+                <h2>💌 Notifications</h2>
+                <p>Choisis les alertes que tu souhaites recevoir (à venir).</p>
+            </div>
         </div>
-        
-        <div class="setting">
-            <h3>📝 Préférences de publication</h3>
-            <p>Configuration des types de contenu et fréquence (à implémenter)</p>
-        </div>
-        
-        <div class="setting">
-            <h3>💌 Notifications</h3>
-            <p>Paramètres des notifications email (à implémenter)</p>
-        </div>
-        
-        <p><a href="/partner/portal">← Retour au portail</a></p>
+
+        <footer>
+            <a href="/partner/portal" class="back">← Retour au portail</a>
+        </footer>
     </body>
     </html>
     """
-    
     return HTMLResponse(html)
 
 
 @router.get("/partner/logout")
 def partner_logout():
-    """Déconnexion du partenaire."""
-    response = RedirectResponse("/partners", status_code=303)
-    response.delete_cookie("partner_id")
-    return response
+    """Déconnexion"""
+    resp = RedirectResponse("/partners", status_code=303)
+    resp.delete_cookie("partner_id")
+    return resp
