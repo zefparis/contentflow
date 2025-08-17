@@ -3,7 +3,7 @@
 import hashlib
 import json
 from contextlib import contextmanager
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import Any, Dict, Callable, Optional
 from filelock import FileLock
 from tenacity import retry, stop_after_attempt, wait_exponential
@@ -13,6 +13,7 @@ from app.models import Job
 from app.utils.logger import logger, set_job_context
 from app.routes.health import increment_job_metric
 import os
+from app.utils.datetime import utcnow
 
 def idempotency_key(payload: Dict[str, Any]) -> str:
     """Generate stable hash for job idempotency."""
@@ -42,7 +43,7 @@ def with_job(db: Session, kind: str, payload: Dict[str, Any]):
         status="queued",
         payload=json.dumps(payload),
         idempotency_key=idem_key,
-        created_at=datetime.utcnow()
+        created_at=utcnow()
     )
     db.add(job)
     db.commit()
@@ -52,14 +53,14 @@ def with_job(db: Session, kind: str, payload: Dict[str, Any]):
     
     try:
         job.status = "running"
-        job.started_at = datetime.utcnow()
+        job.started_at = utcnow()
         db.commit()
         
         logger.info(f"Starting job {job.id} ({kind})")
         yield job.id
         
         job.status = "completed"
-        job.completed_at = datetime.utcnow()
+        job.completed_at = utcnow()
         db.commit()
         
         increment_job_metric(kind, "completed")
@@ -69,7 +70,7 @@ def with_job(db: Session, kind: str, payload: Dict[str, Any]):
         job.status = "failed"
         job.last_error = str(e)
         job.attempts = (job.attempts or 0) + 1
-        job.completed_at = datetime.utcnow()
+        job.completed_at = utcnow()
         db.commit()
         
         increment_job_metric(kind, "failed")

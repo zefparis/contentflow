@@ -7,7 +7,7 @@ import json
 import os
 import random
 from typing import Dict, List, Any, Optional
-from datetime import datetime
+from app.utils.datetime import iso_utc
 import logging
 
 logger = logging.getLogger(__name__)
@@ -167,7 +167,7 @@ class ContentFlowConfig:
                 "cta": cta,
                 "hashtag_string": " ".join(hashtags),
                 "description": f"{title}\n\n{' '.join(hashtags)}\n\n{cta}",
-                "generated_at": datetime.now().isoformat()
+                "generated_at": iso_utc()
             }
             
         except Exception as e:
@@ -185,7 +185,7 @@ class ContentFlowConfig:
             "cta": "En savoir plus ↓",
             "hashtag_string": "#Guide #2025 #Astuce",
             "description": "Guide essentiel 2025\n\n#Guide #2025 #Astuce\n\nEn savoir plus ↓",
-            "generated_at": datetime.now().isoformat()
+            "generated_at": iso_utc()
         }
     
     def get_niche_metrics(self) -> Dict[str, Any]:

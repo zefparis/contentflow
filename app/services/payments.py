@@ -5,7 +5,7 @@ import logging
 import stripe
 import requests
 from typing import Dict, Any, Optional
-from datetime import datetime
+from app.utils.datetime import utcnow
 from sqlalchemy.orm import Session
 
 from app.models import MetricEvent, Link
@@ -35,11 +35,11 @@ class PaymentProcessor:
         try:
             # Query revenue from metric events
             from sqlalchemy import func, text
-            from datetime import datetime, timedelta
+            from datetime import timedelta
             
             # Get current month start
-            now = datetime.now()
-            month_start = datetime(now.year, now.month, 1)
+            now = utcnow()
+            month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
             
             # Calculate revenue from clicks and conversions
             revenue_query = db.execute(text("""
@@ -150,7 +150,7 @@ class PaymentProcessor:
             
             payout_data = {
                 "sender_batch_header": {
-                    "sender_batch_id": f"ContentFlow_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
+                    "sender_batch_id": f"ContentFlow_{utcnow().strftime('%Y%m%d_%H%M%S')}",
                     "email_subject": "Vous avez reçu un paiement ContentFlow",
                     "email_message": f"Vos revenus ContentFlow: €{amount_eur:.2f}"
                 },
@@ -163,7 +163,7 @@ class PaymentProcessor:
                         },
                         "receiver": recipient_email,
                         "note": description,
-                        "sender_item_id": f"CF_{datetime.now().timestamp()}"
+                        "sender_item_id": f"CF_{utcnow().timestamp()}"
                     }
                 ]
             }

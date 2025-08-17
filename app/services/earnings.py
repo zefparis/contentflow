@@ -1,4 +1,5 @@
 import datetime as dt
+from app.utils.datetime import utcnow
 import json
 from sqlalchemy import func
 from app.db import SessionLocal
@@ -7,7 +8,7 @@ from app.config import settings
 
 
 def _since(days: int):
-    return dt.datetime.utcnow() - dt.timedelta(days=days)
+    return utcnow() - dt.timedelta(days=days)
 
 
 def mask_email(e: str) -> str:
@@ -179,7 +180,7 @@ def update_withdraw_status(withdraw_id: str, status: str, admin_notes: str = Non
         
         wr.status = status
         if status in ("paid", "rejected"):
-            wr.processed_at = dt.datetime.utcnow()
+            wr.processed_at = utcnow()
         
         db.commit()
         return {"ok": True, "withdraw_id": withdraw_id, "new_status": status}

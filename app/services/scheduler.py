@@ -1,6 +1,8 @@
 import json
 import logging
 from typing import Dict, Any, List
+from datetime import timedelta
+from app.utils.datetime import utcnow
 from sqlalchemy.orm import Session
 from app.models import Job, Asset, Post, Source
 from app.db import SessionLocal
@@ -267,7 +269,7 @@ def job_publish() -> Dict[str, Any]:
                     
                     if publish_result["success"]:
                         post.status = "published"
-                        post.posted_at = datetime.now()
+                        post.posted_at = utcnow()
                         published_count += 1
                         logger.info(f"✅ Published post {post.id} to {post.platform}")
                         
@@ -335,8 +337,7 @@ def job_metrics() -> Dict[str, Any]:
         db = SessionLocal()
         
         # Get recent posts for metrics collection
-        from datetime import timedelta
-        recent_cutoff = datetime.utcnow() - timedelta(hours=24)
+        recent_cutoff = utcnow() - timedelta(hours=24)
         
         recent_posts = db.query(Post).filter(
             Post.created_at >= recent_cutoff,
@@ -358,7 +359,7 @@ def job_metrics() -> Dict[str, Any]:
                     platform=post.platform,
                     kind="views",
                     value=100 + (post.id * 10),  # Mock values
-                    timestamp=datetime.utcnow(),
+                    timestamp=utcnow(),
                     metadata_json='{"source": "platform_api"}',
                     amount_eur=0.05  # Mock revenue
                 )
@@ -411,7 +412,7 @@ def get_scheduler_status() -> Dict[str, Any]:
     return {
         "status": "active",
         "available_jobs": ["ingest", "transform", "publish", "metrics"],
-        "last_run": datetime.utcnow().isoformat(),
+        "last_run": utcnow().isoformat(),
         "queue_size": 0
     }
 

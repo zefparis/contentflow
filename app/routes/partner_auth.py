@@ -11,6 +11,7 @@ from app.services.brevo_auth import (
 )
 from app.config import settings
 import datetime as dt
+from app.utils.datetime import utcnow
 import secrets
 
 router = APIRouter(tags=["partner_auth"])
@@ -47,7 +48,7 @@ async def _handle_magic_link(email: str) -> tuple[bool, str | None]:
 
         # Generate secure token and persist in DB
         token = secrets.token_urlsafe(32)
-        expires = dt.datetime.utcnow() + dt.timedelta(minutes=15)
+        expires = utcnow() + dt.timedelta(minutes=15)
         ml = MagicLink(
             partner_id=partner.id, email=email, token=token, expires_at=expires
         )
@@ -137,7 +138,7 @@ def partner_login(token: str = Query(...)):
     """Valide un magic link et redirige vers le portail partenaire"""
     db = SessionLocal()
     partner_id = None
-    now = dt.datetime.utcnow()
+    now = utcnow()
     try:
         # 1) Vérifier token DB
         ml = (

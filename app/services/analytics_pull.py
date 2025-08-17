@@ -3,7 +3,7 @@
 import os
 import json
 from typing import Optional, Dict, Any
-from datetime import datetime, timedelta
+from datetime import timedelta
 import requests
 import praw
 from sqlalchemy.orm import Session
@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from app.models import Post, MetricEvent
 from app.utils.logger import logger, set_post_context
 from app.utils.jobs import check_rate_limit, should_backoff_platform
+from app.utils.datetime import utcnow
 
 def pull_youtube_stats(db: Session, post: Post) -> Optional[Dict[str, Any]]:
     """Pull YouTube video statistics via Data API v3."""
@@ -60,7 +61,7 @@ def pull_youtube_stats(db: Session, post: Post) -> Optional[Dict[str, Any]]:
                     platform=post.platform,
                     kind=metric_name,
                     value=value,
-                    timestamp=datetime.utcnow()
+                    timestamp=utcnow()
                 )
                 db.add(metric_event)
         
@@ -115,7 +116,7 @@ def pull_reddit_stats(db: Session, post: Post) -> Optional[Dict[str, Any]]:
                     platform=post.platform,
                     kind=metric_name,
                     value=value,
-                    timestamp=datetime.utcnow()
+                    timestamp=utcnow()
                 )
                 db.add(metric_event)
         
@@ -150,8 +151,8 @@ def pull_pinterest_stats(db: Session, post: Post) -> Optional[Dict[str, Any]]:
         
         url = f"https://api.pinterest.com/v5/pins/{post.platform_id}/analytics"
         params = {
-            "start_date": (datetime.utcnow() - timedelta(days=7)).strftime("%Y-%m-%d"),
-            "end_date": datetime.utcnow().strftime("%Y-%m-%d"),
+            "start_date": (utcnow() - timedelta(days=7)).strftime("%Y-%m-%d"),
+            "end_date": utcnow().strftime("%Y-%m-%d"),
             "metric_types": "IMPRESSION,SAVE,PIN_CLICK,OUTBOUND_CLICK"
         }
         
@@ -176,7 +177,7 @@ def pull_pinterest_stats(db: Session, post: Post) -> Optional[Dict[str, Any]]:
                     platform=post.platform,
                     kind=metric_name,
                     value=value,
-                    timestamp=datetime.utcnow()
+                    timestamp=utcnow()
                 )
                 db.add(metric_event)
         
@@ -231,7 +232,7 @@ def pull_tiktok_stats(db: Session, post: Post) -> Optional[Dict[str, Any]]:
 def _estimate_instagram_metrics(db: Session, post: Post) -> Dict[str, Any]:
     """Estimate Instagram metrics based on historical data."""
     # Simple estimation based on post age and platform averages
-    hours_since_post = (datetime.utcnow() - post.created_at).total_seconds() / 3600
+    hours_since_post = (utcnow() - post.created_at).total_seconds() / 3600
     
     # Base engagement rates for Instagram Reels
     base_views = max(100, int(hours_since_post * 50))
@@ -253,7 +254,7 @@ def _estimate_instagram_metrics(db: Session, post: Post) -> Dict[str, Any]:
                 platform=post.platform,
                 kind=f"estimated_{metric_name}",
                 value=value,
-                timestamp=datetime.utcnow()
+                timestamp=utcnow()
             )
             db.add(metric_event)
     
@@ -264,7 +265,7 @@ def _estimate_instagram_metrics(db: Session, post: Post) -> Dict[str, Any]:
 
 def _estimate_tiktok_metrics(db: Session, post: Post) -> Dict[str, Any]:
     """Estimate TikTok metrics based on historical data."""
-    hours_since_post = (datetime.utcnow() - post.created_at).total_seconds() / 3600
+    hours_since_post = (utcnow() - post.created_at).total_seconds() / 3600
     
     # Base engagement rates for TikTok
     base_views = max(200, int(hours_since_post * 100))
@@ -286,7 +287,7 @@ def _estimate_tiktok_metrics(db: Session, post: Post) -> Dict[str, Any]:
                 platform=post.platform,
                 kind=f"estimated_{metric_name}",
                 value=value,
-                timestamp=datetime.utcnow()
+                timestamp=utcnow()
             )
             db.add(metric_event)
     

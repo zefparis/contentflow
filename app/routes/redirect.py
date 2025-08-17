@@ -4,8 +4,8 @@ import os
 from fastapi import APIRouter, Request, Response, Depends
 from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
-from datetime import datetime
 import hashlib
+from app.utils.datetime import utcnow
 
 from app.db import get_db
 from app.models import Link, MetricEvent, Post
@@ -32,7 +32,7 @@ async def redirect_shortlink(
     # Get or create session ID for tracking
     session_id = request.cookies.get("cf_session")
     if not session_id:
-        session_id = hashlib.md5(f"{request.client.host}_{datetime.utcnow()}".encode()).hexdigest()[:16]
+        session_id = hashlib.md5(f"{request.client.host}_{utcnow()}".encode()).hexdigest()[:16]
         response.set_cookie("cf_session", session_id, max_age=86400)  # 24 hours
     
     # Get post information for context
@@ -54,7 +54,7 @@ async def redirect_shortlink(
         value=1,
         session_id=session_id,
         amount_eur=amount_eur,
-        timestamp=datetime.utcnow(),
+        timestamp=utcnow(),
         metadata={
             "link_id": link.id,
             "user_agent": request.headers.get("user-agent", ""),

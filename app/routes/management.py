@@ -4,7 +4,8 @@ import os
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from sqlalchemy.orm import Session
 from typing import Dict, Any, List, Optional
-from datetime import datetime, timedelta
+from datetime import timedelta
+from app.utils.datetime import utcnow, iso_utc
 
 from app.db import get_db
 from app.models import Job, Asset, Post, MetricEvent, Rule
@@ -47,7 +48,7 @@ async def system_status(db: Session = Depends(get_db)) -> Dict[str, Any]:
         
         return {
             "status": "healthy",
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": iso_utc(),
             "system": system_stats,
             "production": production_stats
         }
@@ -71,7 +72,7 @@ async def export_metrics(
         export_stats = {
             "revenue_export": revenue_filepath,
             "exported_days": days,
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": iso_utc()
         }
         
         logger.info(f"Metrics exported for {days} days")
@@ -98,7 +99,7 @@ async def performance_dashboard(
         # Daily revenue trend
         revenue_trend = []
         for i in range(days):
-            date = datetime.utcnow().date() - timedelta(days=i)
+            date = utcnow().date() - timedelta(days=i)
             daily_revenue = compute_daily_revenue(db, date)
             revenue_trend.append({
                 "date": date.isoformat(),
@@ -151,7 +152,7 @@ async def run_maintenance(
             "success": True,
             "task": task,
             "message": message,
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": iso_utc()
         }
         
     except Exception as e:
@@ -198,14 +199,14 @@ async def update_rule(
             rule.value = value
             if description:
                 rule.description = description
-            rule.updated_at = datetime.utcnow()
+            rule.updated_at = utcnow()
         else:
             rule = Rule(
                 key=rule_key,
                 value=value,
                 description=description or f"Rule for {rule_key}",
-                created_at=datetime.utcnow(),
-                updated_at=datetime.utcnow()
+                created_at=utcnow(),
+                updated_at=utcnow()
             )
             db.add(rule)
         

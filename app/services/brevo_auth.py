@@ -6,6 +6,7 @@ Intégration complète avec l'API Brevo pour l'envoi d'emails sécurisés.
 import requests
 import secrets
 import datetime as dt
+from app.utils.datetime import utcnow
 from typing import Dict, Optional
 from app.config import settings
 
@@ -18,8 +19,8 @@ def generate_magic_token(partner_id: str, email: str) -> str:
     magic_tokens[token] = {
         "partner_id": partner_id,
         "email": email.lower().strip(),
-        "expires": dt.datetime.utcnow() + dt.timedelta(minutes=15),
-        "created_at": dt.datetime.utcnow()
+        "expires": utcnow() + dt.timedelta(minutes=15),
+        "created_at": utcnow()
     }
     return token
 
@@ -31,7 +32,7 @@ def validate_magic_token(token: str) -> Optional[dict]:
     token_data = magic_tokens[token]
     
     # Vérifier expiration
-    if dt.datetime.utcnow() > token_data["expires"]:
+    if utcnow() > token_data["expires"]:
         del magic_tokens[token]
         return None
     
@@ -157,7 +158,7 @@ def send_magic_link_email(email: str, magic_link: str) -> bool:
 
 def cleanup_expired_tokens() -> int:
     """Nettoie les tokens expirés. Retourne le nombre de tokens supprimés."""
-    now = dt.datetime.utcnow()
+    now = utcnow()
     expired_tokens = [
         token for token, data in magic_tokens.items() 
         if now > data["expires"]
@@ -173,7 +174,7 @@ def cleanup_expired_tokens() -> int:
 
 def get_token_stats() -> dict:
     """Retourne des statistiques sur les tokens actifs."""
-    now = dt.datetime.utcnow()
+    now = utcnow()
     active_tokens = [
         data for data in magic_tokens.values()
         if now <= data["expires"]

@@ -1,68 +1,69 @@
 """Maintenance jobs for retention, cleanup, and system health."""
 
 import os
-from datetime import datetime, timedelta
+from datetime import timedelta
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 
 from app.models import Asset, Job, MetricEvent
 from app.utils.logger import logger
-# from app.utils.jobs import with_job, get_retry_decorator
+from app.utils.datetime import utcnow, iso_utc
+from app.utils.jobs import with_job, get_retry_decorator
 
 def job_retention(db: Session):
     """Clean up old data according to retention policies."""
-        logger.info("Starting data retention cleanup")
-        
-        # Clean up failed assets older than 7 days
-        cutoff_failed = datetime.utcnow() - timedelta(days=7)
-        failed_assets = db.query(Asset).filter(
-            Asset.status == "failed",
-            Asset.created_at < cutoff_failed
-        ).all()
-        
-        for asset in failed_assets:
-            logger.info(f"Deleting failed asset {asset.id}")
-            db.delete(asset)
-        
-        # Clean up old jobs older than 30 days
-        cutoff_jobs = datetime.utcnow() - timedelta(days=30)
-        old_jobs = db.query(Job).filter(
-            Job.created_at < cutoff_jobs
-        ).all()
-        
-        for job in old_jobs:
-            logger.info(f"Deleting old job {job.id}")
-            db.delete(job)
-        
-        # Clean up old metric events older than 90 days (keep recent for analytics)
-        cutoff_metrics = datetime.utcnow() - timedelta(days=90)
-        old_metrics_count = db.query(MetricEvent).filter(
+    logger.info("Starting data retention cleanup")
+    
+    # Clean up failed assets older than 7 days
+    cutoff_failed = utcnow() - timedelta(days=7)
+    failed_assets = db.query(Asset).filter(
+        Asset.status == "failed",
+        Asset.created_at < cutoff_failed
+    ).all()
+    
+    for asset in failed_assets:
+        logger.info(f"Deleting failed asset {asset.id}")
+        db.delete(asset)
+    
+    # Clean up old jobs older than 30 days
+    cutoff_jobs = utcnow() - timedelta(days=30)
+    old_jobs = db.query(Job).filter(
+        Job.created_at < cutoff_jobs
+    ).all()
+    
+    for job in old_jobs:
+        logger.info(f"Deleting old job {job.id}")
+        db.delete(job)
+    
+    # Clean up old metric events older than 90 days (keep recent for analytics)
+    cutoff_metrics = utcnow() - timedelta(days=90)
+    old_metrics_count = db.query(MetricEvent).filter(
+        MetricEvent.timestamp < cutoff_metrics
+    ).count()
+    
+    if old_metrics_count > 0:
+        logger.info(f"Deleting {old_metrics_count} old metric events")
+        db.query(MetricEvent).filter(
             MetricEvent.timestamp < cutoff_metrics
-        ).count()
-        
-        if old_metrics_count > 0:
-            logger.info(f"Deleting {old_metrics_count} old metric events")
-            db.query(MetricEvent).filter(
-                MetricEvent.timestamp < cutoff_metrics
-            ).delete(synchronize_session=False)
-        
-        # Clean up completed jobs older than 14 days
-        cutoff_jobs = datetime.utcnow() - timedelta(days=14)
-        old_jobs_count = db.query(Job).filter(
+        ).delete(synchronize_session=False)
+    
+    # Clean up completed jobs older than 14 days
+    cutoff_jobs = utcnow() - timedelta(days=14)
+    old_jobs_count = db.query(Job).filter(
+        Job.status == "completed",
+        Job.completed_at < cutoff_jobs
+    ).count()
+    
+    if old_jobs_count > 0:
+        logger.info(f"Deleting {old_jobs_count} old completed jobs")
+        db.query(Job).filter(
             Job.status == "completed",
             Job.completed_at < cutoff_jobs
-        ).count()
-        
-        if old_jobs_count > 0:
-            logger.info(f"Deleting {old_jobs_count} old completed jobs")
-            db.query(Job).filter(
-                Job.status == "completed",
-                Job.completed_at < cutoff_jobs
-            ).delete(synchronize_session=False)
-        
-        db.commit()
-        
-        logger.info(f"Retention cleanup completed: {len(failed_assets)} assets, {len(old_runs)} runs, {old_metrics_count} metrics, {old_jobs_count} jobs")
+        ).delete(synchronize_session=False)
+    
+    db.commit()
+    
+    logger.info(f"Retention cleanup completed: {len(failed_assets)} assets, {old_metrics_count} metrics, {old_jobs_count} jobs")
 
 @get_retry_decorator("maintenance")
 def job_s3_lifecycle(db: Session):
@@ -71,7 +72,7 @@ def job_s3_lifecycle(db: Session):
         logger.info("Starting S3 lifecycle management")
         
         # Find assets older than 30 days that are posted
-        cutoff_date = datetime.utcnow() - timedelta(days=30)
+        cutoff_date = utcnow() - timedelta(days=30)
         old_assets = db.query(Asset).filter(
             Asset.created_at < cutoff_date,
             Asset.status == "ready",
@@ -91,7 +92,7 @@ def job_s3_lifecycle(db: Session):
                 meta = {}
             
             meta["s3_storage_class"] = "infrequent_access"
-            meta["lifecycle_moved_at"] = datetime.utcnow().isoformat()
+            meta["lifecycle_moved_at"] = iso_utc()
             asset.meta_json = json.dumps(meta)
         
         db.commit()
@@ -105,7 +106,7 @@ def job_watchdog(db: Session):
         logger.info("Starting job watchdog check")
         
         # Find jobs that have been running for more than 30 minutes
-        stuck_threshold = datetime.utcnow() - timedelta(minutes=30)
+        stuck_threshold = utcnow() - timedelta(minutes=30)
         stuck_jobs = db.query(Job).filter(
             Job.status == "running",
             Job.started_at < stuck_threshold
@@ -116,8 +117,8 @@ def job_watchdog(db: Session):
             
             # Move to DLQ with reason
             job.status = "dlq"
-            job.dlq_reason = f"Stuck for {datetime.utcnow() - job.started_at}"
-            job.completed_at = datetime.utcnow()
+            job.dlq_reason = f"Stuck for {utcnow() - job.started_at}"
+            job.completed_at = utcnow()
             
             # Could also restart certain types of jobs automatically
             if job.kind in ["ingest", "metrics"] and job.attempts < 2:
@@ -133,7 +134,7 @@ def job_watchdog(db: Session):
                     payload=job.payload,
                     idempotency_key=idempotency_key(payload) + "_retry",
                     attempts=job.attempts + 1,
-                    created_at=datetime.utcnow()
+                    created_at=utcnow()
                 )
                 db.add(new_job)
         
@@ -154,7 +155,7 @@ def get_system_stats(db: Session) -> dict:
             },
             "metrics": {
                 "events_last_24h": db.query(MetricEvent).filter(
-                    MetricEvent.timestamp > datetime.utcnow() - timedelta(hours=24)
+                    MetricEvent.timestamp > utcnow() - timedelta(hours=24)
                 ).count(),
                 "total_revenue_eur": db.execute(
                     text("SELECT COALESCE(SUM(amount_eur), 0) FROM metric_events WHERE amount_eur > 0")

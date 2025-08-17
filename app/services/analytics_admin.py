@@ -1,11 +1,12 @@
 import datetime as dt
+from app.utils.datetime import utcnow
 from sqlalchemy import func
 from app.db import SessionLocal
 from app.config import settings
 from app.models import MetricEvent, WalletEntry, Payout, Assignment, PartnerFlag, Partner
 from app.services.pricing import current_offer
 
-def _utcnow(): return dt.datetime.utcnow()
+def _utcnow(): return utcnow()
 
 def summary():
     db = SessionLocal()

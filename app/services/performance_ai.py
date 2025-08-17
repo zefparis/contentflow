@@ -9,7 +9,8 @@ import logging
 import json
 import numpy as np
 from typing import Dict, List, Optional, Tuple, Any
-from datetime import datetime, timedelta
+from datetime import timedelta
+from app.utils.datetime import utcnow
 from sqlalchemy.orm import Session
 from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
 from sklearn.model_selection import train_test_split
@@ -55,9 +56,9 @@ class PerformancePredictionAI:
             "quality_score": plan.get("quality_score", 0.5),
             
             # Temporal features
-            "hour_of_day": datetime.now().hour,
-            "day_of_week": datetime.now().weekday(),
-            "is_weekend": 1 if datetime.now().weekday() >= 5 else 0,
+            "hour_of_day": utcnow().hour,
+            "day_of_week": utcnow().weekday(),
+            "is_weekend": 1 if utcnow().weekday() >= 5 else 0,
             
             # Platform features
             "platform_youtube": 1 if post.platform == "youtube" else 0,
@@ -102,7 +103,7 @@ class PerformancePredictionAI:
         db = SessionLocal()
         try:
             # Get posts with metrics from last N days
-            cutoff_date = datetime.now() - timedelta(days=days)
+            cutoff_date = utcnow() - timedelta(days=days)
             
             query = db.query(Post, Asset).join(Asset).filter(
                 Post.posted_at >= cutoff_date,
@@ -205,7 +206,7 @@ class PerformancePredictionAI:
             "scaler": scaler,
             "feature_names": feature_names,
             "platform": platform,
-            "trained_at": datetime.now(),
+            "trained_at": utcnow(),
             "r2_score": best_score,
             "training_samples": len(X),
             "model_type": best_name

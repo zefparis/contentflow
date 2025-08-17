@@ -1,4 +1,5 @@
 import datetime as dt
+from app.utils.datetime import utcnow
 import json
 import math
 from collections import defaultdict
@@ -8,7 +9,7 @@ from app.models import MetricEvent, Post, Asset, Job
 
 
 def _since(days: int) -> dt.datetime:
-    return dt.datetime.utcnow() - dt.timedelta(days=days)
+    return utcnow() - dt.timedelta(days=days)
 
 
 def fetch_kpis(lookback_days: int = 7) -> dict:

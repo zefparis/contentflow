@@ -1,11 +1,12 @@
 import datetime as dt
+from app.utils.datetime import utcnow
 from sqlalchemy import func
 from app.db import SessionLocal
 from app.config import settings
 from app.models import MetricEvent
 
 def _since(days: int): 
-    return dt.datetime.utcnow() - dt.timedelta(days=7 if days <= 0 else days)
+    return utcnow() - dt.timedelta(days=7 if days <= 0 else days)
 
 def epc_7d(platform: str | None = None, niche: str | None = None) -> float:
     """EPC observé (€/clic) sur 7j; fallback DEFAULT_EPC_EUR si pas de data."""

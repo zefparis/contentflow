@@ -5,7 +5,7 @@ import uuid
 import logging
 from typing import Optional, Dict, Any
 from contextvars import ContextVar
-from datetime import datetime
+from app.utils.datetime import iso_utc
 
 # Context variables for request tracking
 request_id_ctx: ContextVar[Optional[str]] = ContextVar('request_id', default=None)
@@ -17,7 +17,7 @@ class JSONFormatter(logging.Formatter):
     
     def format(self, record):
         log_data = {
-            'timestamp': datetime.utcnow().isoformat() + 'Z',
+            'timestamp': iso_utc(),
             'level': record.levelname,
             'logger': record.name,
             'message': record.getMessage(),

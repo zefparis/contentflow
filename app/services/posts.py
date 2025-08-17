@@ -4,6 +4,7 @@ from app.models import Post, Link
 from app.utils.logger import logger
 from app.services.risk import calculate_risk_score
 from app.utils.bandit import bandit
+from app.utils.datetime import utcnow, iso_utc
 
 
 def queue_post_for_publishing(db: Session, post: Post) -> bool:
@@ -31,7 +32,7 @@ def queue_post_for_publishing(db: Session, post: Post) -> bool:
         
         # Initialize metrics
         metrics = {
-            "queued_at": "2024-01-15T12:00:00Z",
+            "queued_at": iso_utc(),
             "risk_score": risk_score,
             "platform": post.platform
         }

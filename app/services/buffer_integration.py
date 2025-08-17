@@ -6,8 +6,8 @@ Provides automated multi-platform publishing via Buffer's API
 import os
 import json
 import requests
-from datetime import datetime, timezone
 from typing import Dict, List, Optional, Any
+from app.utils.datetime import utcnow, iso_utc
 from sqlalchemy.orm import Session
 
 from app.db import SessionLocal
@@ -115,7 +115,7 @@ class BufferAPI:
             if result.get('success'):
                 # Update post status in database
                 post.status = 'published'
-                post.posted_at = datetime.now(timezone.utc)
+                post.posted_at = utcnow()
                 post.external_id = result.get('id')
                 
                 # Store Buffer response metadata
@@ -156,7 +156,7 @@ class BufferAPI:
                 post.status = 'failed'
                 post.metadata_json = json.dumps({
                     'error': f'Buffer API request failed: {str(e)}',
-                    'timestamp': datetime.now(timezone.utc).isoformat()
+                    'timestamp': iso_utc()
                 })
                 db.commit()
             

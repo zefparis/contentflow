@@ -2,6 +2,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse
 from app.config import settings
 from app.services.analytics_admin import summary
+from app.utils.datetime import utcnow
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -113,7 +114,7 @@ def admin_monitoring(request: Request):
             </div>
             
             <div style="margin-top: 40px; padding: 16px; background: #f1f5f9; border-radius: 8px; font-size: 12px; color: #64748b;">
-                <strong>Dernière mise à jour:</strong> {dt.datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC
+                <strong>Dernière mise à jour:</strong> {utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC
                 <br><strong>Mode:</strong> {s['offer'].get('terms',{}).get('mode','development').upper()}
             </div>
         </div>

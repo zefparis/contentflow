@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Request, Body, Depends
 from fastapi.responses import JSONResponse
 import datetime as dt
+from app.utils.datetime import utcnow
 
 from app.config import settings
 from app.db import get_session
@@ -151,7 +152,7 @@ def byop_publish(request: Request, payload: dict = Body(...), db=Depends(get_ses
                 platform=plat,
                 status="approved",  # Direct approval for BYOP publish
                 variation_salt="byop",  # Let pipeline add variations
-                planned_at=dt.datetime.utcnow()
+                planned_at=utcnow()
             )
             db.add(asg)
             db.commit()
@@ -194,9 +195,9 @@ def get_publish_status(submission_id: str, request: Request, db=Depends(get_sess
     except Exception:
         # Mock status if models don't exist
         status_by_platform = {
-            "youtube": {"status": "approved", "created_at": dt.datetime.utcnow().isoformat()},
-            "pinterest": {"status": "posted", "created_at": dt.datetime.utcnow().isoformat()},
-            "reddit": {"status": "pending", "created_at": dt.datetime.utcnow().isoformat()}
+            "youtube": {"status": "approved", "created_at": utcnow().isoformat()},
+            "pinterest": {"status": "posted", "created_at": utcnow().isoformat()},
+            "reddit": {"status": "pending", "created_at": utcnow().isoformat()}
         }
 
     return {

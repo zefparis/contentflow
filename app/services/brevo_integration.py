@@ -7,7 +7,8 @@ import os
 import json
 import logging
 from typing import Dict, List, Optional, Any
-from datetime import datetime, timedelta
+from datetime import timedelta
+from app.utils.datetime import utcnow, iso_utc
 import requests
 from dataclasses import dataclass
 
@@ -203,7 +204,7 @@ class ContentFlowEmailService:
         """
         
         campaign = EmailCampaign(
-            name=f"ContentFlow Newsletter - {datetime.now().strftime('%Y-%m-%d')}",
+            name=f"ContentFlow Newsletter - {utcnow().strftime('%Y-%m-%d')}",
             subject=f"📈 Vos {len(top_posts)} meilleurs contenus cette semaine",
             content=html_content
         )
@@ -252,7 +253,7 @@ class ContentFlowEmailService:
         """
         
         campaign = EmailCampaign(
-            name=f"Revenue Alert - {datetime.now().strftime('%Y-%m-%d')}",
+            name=f"Revenue Alert - {utcnow().strftime('%Y-%m-%d')}",
             subject=f"💰 {total_revenue:.0f}€ générés aujourd'hui! ({growth:+.1f}%)",
             content=html_content
         )
@@ -299,7 +300,7 @@ class ContentFlowEmailService:
         """
         
         campaign = EmailCampaign(
-            name=f"Content Promo {niche.title()} - {datetime.now().strftime('%Y-%m-%d')}",
+            name=f"Content Promo {niche.title()} - {utcnow().strftime('%Y-%m-%d')}",
             subject=f"🔥 Nouveaux contenus {niche} optimisés IA",
             content=html_content
         )
@@ -357,7 +358,7 @@ class ContentFlowEmailService:
                 "total_campaigns": len(campaigns.get('campaigns', [])),
                 "total_lists": len(lists.get('lists', [])),
                 "api_key_configured": bool(self.brevo.api_key),
-                "last_check": datetime.now().isoformat()
+                "last_check": iso_utc()
             }
             
         except Exception as e:

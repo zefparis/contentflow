@@ -1,7 +1,7 @@
 from typing import Dict, Any
 import json
-from datetime import datetime
 from app.utils.logger import logger
+from app.utils.datetime import iso_utc
 
 
 class MetricsCollector:
@@ -12,7 +12,7 @@ class MetricsCollector:
     
     def record_event(self, event_type: str, data: Dict[str, Any]):
         """Record a metrics event"""
-        timestamp = datetime.utcnow().isoformat()
+        timestamp = iso_utc()
         
         if event_type not in self.metrics:
             self.metrics[event_type] = []

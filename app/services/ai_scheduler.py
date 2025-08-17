@@ -3,7 +3,8 @@ AI Scheduler - Gestion automatisée des tâches d'autopilot
 """
 import time
 import threading
-from datetime import datetime, timedelta
+from datetime import timedelta
+from app.utils.datetime import utcnow
 from app.config import settings
 from app.aiops.autopilot import ai_tick
 from app.utils.logger import logger
@@ -51,7 +52,7 @@ class AIScheduler:
                     if result.get("ok"):
                         executed_count = len(result.get("executed", []))
                         logger.info(f"AI tick completed successfully. {executed_count} actions executed.")
-                        self.last_tick = datetime.utcnow()
+                        self.last_tick = utcnow()
                     else:
                         logger.error(f"AI tick failed: {result.get('error', 'Unknown error')}")
                 
@@ -68,7 +69,7 @@ class AIScheduler:
             return True
             
         interval = timedelta(minutes=settings.AI_TICK_INTERVAL_MIN)
-        return datetime.utcnow() - self.last_tick >= interval
+        return utcnow() - self.last_tick >= interval
         
     def force_tick(self, dry_run: bool = None) -> dict:
         """Force un tick immédiat."""
@@ -77,7 +78,7 @@ class AIScheduler:
         result = ai_tick(dry_run=dry)
         
         if result.get("ok") and not dry:
-            self.last_tick = datetime.utcnow()
+            self.last_tick = utcnow()
             
         return result
         
