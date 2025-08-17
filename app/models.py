@@ -168,6 +168,20 @@ class AgentAction(Base):
     error = Column(String, nullable=True)
 
 
+class Run(Base):
+    __tablename__ = "runs"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    status = Column(String(20), default="pending")  # pending, running, completed, failed
+    kind = Column(String(50))  # import, export, publish, etc.
+    details = Column(Text, nullable=True)  # JSON details about the run
+    started_at = Column(DateTime, nullable=True)
+    completed_at = Column(DateTime, nullable=True)
+    error = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 class Partner(Base):
     __tablename__ = "partners"
     
