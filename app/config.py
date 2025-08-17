@@ -10,28 +10,28 @@ from pydantic_settings.sources import EnvSettingsSource
 
 class _SmartEnvSource(EnvSettingsSource):
     """
-    Source ENV custom :
-    - Laisse le chemin “normal” gérer JSON (list/dict) via super()
-    - Si ça pète, tolère CSV ("a,b,c") pour list[str]
-    - Traite la chaîne vide "" comme [] pour list[str]
+    Source ENV custom pour Pydantic Settings v2 :
+    - JSON standard: on laisse super().decode_complex_value gérer
+    - Fallback CSV: "a,b,c" -> ["a","b","c"] pour list[str]
+    - String vide "" pour list[str] -> []
     """
-    def decode_complex_value(self, field_name, field, value):  # noqa: N802 (API interne Pydantic)
+
+    def decode_complex_value(self, field_name, field, value):  # noqa: N802
         try:
-            # Chemin standard: JSON -> objet Python
             return super().decode_complex_value(field_name, field, value)
         except Exception:
-            # Fallback: CSV / vide / autres cas
+            # Normalisation fallback
             if isinstance(value, (bytes, bytearray)):
                 value = value.decode()
             if isinstance(value, str):
                 s = value.strip()
-                # list[...] + string vide => []
+                # list[...] + "" => []
                 if get_origin(getattr(field, "annotation", None)) is list and s == "":
                     return []
-                # CSV => split
+                # CSV => liste
                 if ("," in s) and not s.startswith(("{", "[")):
                     return [x.strip() for x in s.split(",") if x.strip()]
-            # Si on ne sait pas normaliser, on relance l’erreur d’origine
+            # Sinon, on relance l'erreur d'origine
             raise
 
 
@@ -152,30 +152,26 @@ class Settings(BaseSettings):
     # --- CORS ---
     CORS_ORIGINS: List[str] = ["*"]
 
-    # Helpers
-    @property
-    def META_BASE(self) -> str:
-        return f"https://graph.facebook.com/{self.META_GRAPH_VERSION}"
-
-    # v2: config “propre”
+    # Pydantic Settings v2
     model_config = SettingsConfigDict(
         env_file=".env",
         case_sensitive=False,
     )
 
-    # Injecte la source ENV custom AVANT les validators
+    # ⚠️ v2: signature avec settings_cls en 1er
     @classmethod
     def settings_customise_sources(  # type: ignore[override]
         cls,
+        settings_cls,            # <- requis en v2
         init_settings,
         env_settings,
         dotenv_settings,
         file_secret_settings,
     ):
-        # Remplace la source ENV par notre _SmartEnvSource
-        return (init_settings, _SmartEnvSource(cls), dotenv_settings, file_secret_settings)
+        # Remplace la source ENV par notre source tolérante CSV/JSON/empty
+        return (init_settings, _SmartEnvSource(settings_cls), dotenv_settings, file_secret_settings)
 
-    # Filet de sécurité: si jamais on reçoit encore une string brute
+    # Filet de sécu au cas où une string brute passe encore
     @field_validator(
         "PAYOUT_METHODS",
         "BYOP_PUBLISH_PLATFORMS",
