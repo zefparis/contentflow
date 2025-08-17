@@ -1,34 +1,38 @@
-from typing import List, Any
-import json as _json
+# app/config.py
+from __future__ import annotations
+
+from typing import Any, List, get_origin
+
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings.sources import EnvSettingsSource
 
 
-def _smart_json_loads(v: Any) -> Any:
+class _SmartEnvSource(EnvSettingsSource):
     """
-    pydantic-settings utilise cette fonction pour décoder les types complexes.
-    - Si JSON valide -> retourne l’objet
-    - Sinon si string CSV -> split en liste
-    - Sinon -> renvoie tel quel (laissera le validator gérer)
+    Source ENV custom :
+    - Laisse le chemin “normal” gérer JSON (list/dict) via super()
+    - Si ça pète, tolère CSV ("a,b,c") pour list[str]
+    - Traite la chaîne vide "" comme [] pour list[str]
     """
-    if isinstance(v, (list, dict)):
-        return v
-    if isinstance(v, (bytes, bytearray)):
-        v = v.decode()
-    if not isinstance(v, str):
-        return v
-
-    s = v.strip()
-    # 1) tentative JSON
-    try:
-        return _json.loads(s)
-    except Exception:
-        pass
-    # 2) fallback CSV
-    if s and ("," in s) and not s.startswith(("{", "[")):
-        return [x.strip() for x in s.split(",") if x.strip()]
-    # 3) laisser tel quel
-    return v
+    def decode_complex_value(self, field_name, field, value):  # noqa: N802 (API interne Pydantic)
+        try:
+            # Chemin standard: JSON -> objet Python
+            return super().decode_complex_value(field_name, field, value)
+        except Exception:
+            # Fallback: CSV / vide / autres cas
+            if isinstance(value, (bytes, bytearray)):
+                value = value.decode()
+            if isinstance(value, str):
+                s = value.strip()
+                # list[...] + string vide => []
+                if get_origin(getattr(field, "annotation", None)) is list and s == "":
+                    return []
+                # CSV => split
+                if ("," in s) and not s.startswith(("{", "[")):
+                    return [x.strip() for x in s.split(",") if x.strip()]
+            # Si on ne sait pas normaliser, on relance l’erreur d’origine
+            raise
 
 
 class Settings(BaseSettings):
@@ -153,14 +157,25 @@ class Settings(BaseSettings):
     def META_BASE(self) -> str:
         return f"https://graph.facebook.com/{self.META_GRAPH_VERSION}"
 
-    # Pydantic Settings v2 config (CSV/JSON ok)
+    # v2: config “propre”
     model_config = SettingsConfigDict(
         env_file=".env",
         case_sensitive=False,
-        json_loads=_smart_json_loads,
     )
 
-    # Ce validator reste utile si jamais le provider nous passe encore une string brute
+    # Injecte la source ENV custom AVANT les validators
+    @classmethod
+    def settings_customise_sources(  # type: ignore[override]
+        cls,
+        init_settings,
+        env_settings,
+        dotenv_settings,
+        file_secret_settings,
+    ):
+        # Remplace la source ENV par notre _SmartEnvSource
+        return (init_settings, _SmartEnvSource(cls), dotenv_settings, file_secret_settings)
+
+    # Filet de sécurité: si jamais on reçoit encore une string brute
     @field_validator(
         "PAYOUT_METHODS",
         "BYOP_PUBLISH_PLATFORMS",
