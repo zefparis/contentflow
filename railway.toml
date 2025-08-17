@@ -1,21 +1,9 @@
-# ContentFlow • API + (optionnel) Worker
+## ContentFlow • Railway deployment via Dockerfile
 [build]
-builder = "NIXPACKS"
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
 
-[env]
-PYTHON_VERSION = "3.11"
-NIXPACKS_PKGS  = "ffmpeg"
-PORT           = "8080"
-
-# -------- API (FastAPI/Uvicorn) --------
-[service.api]
-root  = "."
-start = "python -m uvicorn app.main:app --host 0.0.0.0 --port $PORT"
-healthcheckPath = "/healthz"
-autoDeploy = true
-
-# -------- Worker (APScheduler) — optionnel --------
-[service.worker]
-root  = "."
-start = "python -m app.workers.autopilot"
-restartPolicyType = "ON_FAILURE"
+[deploy]
+# Leave default to follow Dockerfile CMD (start.sh wrapper).
+# To force explicitly, uncomment:
+# startCommand = "sh -c '/usr/local/bin/start.sh'"

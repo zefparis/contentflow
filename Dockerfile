@@ -42,9 +42,11 @@ COPY --from=frontend /app/dist/public/ ./app/static/
 ENV PORT=8000
 EXPOSE 8000
 
-# Healthcheck (optional)
+# Healthcheck (shell for expansion OK)
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
-  CMD curl -fsS http://localhost:${PORT:-8000}/healthz || exit 1
+  CMD sh -c 'curl -fsS http://localhost:${PORT:-8000}/healthz || exit 1'
 
-# Start FastAPI with resolved $PORT
-CMD sh -c "exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"
+# Start via wrapper (guarantees $PORT expansion)
+COPY start.sh /usr/local/bin/start.sh
+RUN sed -i 's/\r$//' /usr/local/bin/start.sh && chmod +x /usr/local/bin/start.sh
+CMD ["sh", "-c", "/usr/local/bin/start.sh"]
