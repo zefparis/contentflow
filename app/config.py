@@ -1,4 +1,4 @@
-import os
+from typing import List
 from pydantic_settings import BaseSettings
 
 
@@ -63,7 +63,7 @@ class Settings(BaseSettings):
     PAYOUT_RELEASE_DAYS: int = 30
     PAYOUT_WEEKDAY: int = 1  # Lundi
     PAYOUT_APPROVAL_THRESHOLD_EUR: float = 200.0
-    PAYOUT_METHODS: str = "paypal,bank"
+    PAYOUT_METHODS: List[str] = ["paypal", "bank"]
 
     # --- Offers / Revshare ---
     DEFAULT_EPC_EUR: float = 0.25
@@ -79,7 +79,7 @@ class Settings(BaseSettings):
     AFF_ACCEPT_PENDING: bool = True
     AFF_MAX_AGE_DAYS: int = 45
     AFF_SUBID_FORMAT: str = "pid:aid:clk"
-    AFF_ALLOWLIST_IPS: str = ""
+    AFF_ALLOWLIST_IPS: List[str] = []
 
     # --- Risk Management ---
     RISK_VELOCITY_MAX_CLICKS_10M: int = 40
@@ -105,7 +105,7 @@ class Settings(BaseSettings):
     FEATURE_BYOP: bool = False
     FEATURE_BYOP_PUBLISH: bool = False
     BYOP_DEFAULT_REVSHARE_PCT: float = 0.40
-    BYOP_PUBLISH_PLATFORMS: str = "youtube,pinterest,reddit,instagram"
+    BYOP_PUBLISH_PLATFORMS: List[str] = ["youtube", "pinterest", "reddit", "instagram"]
 
     # --- Sharing Kit ---
     SHARE_EMAIL_ENABLED: bool = True
@@ -115,17 +115,15 @@ class Settings(BaseSettings):
     # --- Logging ---
     LOG_LEVEL: str = "INFO"
 
-    # --- Python runtime ---
-    PYTHON_VERSION: str = "3.11"
-
     # --- Helpers ---
     @property
     def META_BASE(self) -> str:
         return f"https://graph.facebook.com/{self.META_GRAPH_VERSION}"
 
-    class Config:
-        env_file = ".env"
-        case_sensitive = False
+    model_config = {
+        "env_file": ".env",
+        "case_sensitive": False,
+    }
 
 
 settings = Settings()
