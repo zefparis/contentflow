@@ -4,6 +4,5 @@ builder = "DOCKERFILE"
 dockerfilePath = "Dockerfile"
 
 [deploy]
-# Leave default to follow Dockerfile CMD (start.sh wrapper).
-# To force explicitly, uncomment:
-# startCommand = "sh -c '/usr/local/bin/start.sh'"
+# Force explicit start to wrapper (ensures $PORT expansion under Railway)
+startCommand = "sh -c '/usr/local/bin/start.sh'"

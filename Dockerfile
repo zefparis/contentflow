@@ -47,6 +47,7 @@ HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
   CMD sh -c 'curl -fsS http://localhost:${PORT:-8000}/healthz || exit 1'
 
 # Start via wrapper (guarantees $PORT expansion)
+RUN echo "IMAGE_BUILT_FROM_DOCKERFILE=1"
 COPY start.sh /usr/local/bin/start.sh
 RUN sed -i 's/\r$//' /usr/local/bin/start.sh && chmod +x /usr/local/bin/start.sh
 CMD ["sh", "-c", "/usr/local/bin/start.sh"]
